@@ -32,7 +32,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `install.sh` no longer auto-detects and silently configures all tools
 - Gemini configuration is now an explicit selection (not always copied)
 - Release workflow generates notes from CHANGELOG.md instead of hardcoded body
-- Release workflow commits CHANGELOG.md updates automatically
+- CHANGELOG.md updates are now developer-driven (via CLAUDE.md rule) instead of automated in CI
 
 ### Removed
 - Auto-detect behavior (`detect_tools()`) replaced by interactive selection
