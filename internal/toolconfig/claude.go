@@ -57,6 +57,11 @@ Link fixes/solutions to the original problem:
 - fix ADDRESSES error
 - pattern RELATED_TO pattern
 
+## 6. CRITICAL: Git Commit → store_memory (MANDATORY)
+After EVERY ` + "`git commit`" + `, you MUST immediately call ` + "`store_memory`" + ` before doing anything else.
+Do NOT proceed to the next task, PR creation, or any other action until ` + "`store_memory`" + ` is called.
+Violation: If you run any tool after ` + "`git commit`" + ` that is not ` + "`store_memory`" + `, you are in violation.
+
 ## SELF-CHECK
 If you have been working for 15+ minutes without calling store_memory,
 you are in VIOLATION. Stop and store what you have learned.
@@ -121,6 +126,7 @@ exit 0
 
 const postToolUseHook = `#!/usr/bin/env bash
 # Contextify PostToolUse hook for Claude Code
+# Enforces store_memory after git commits via state machine.
 # Forces the agent to recall and store memories at the right moments.
 
 # Read tool use info from stdin
@@ -141,19 +147,49 @@ elif command -v python3 &>/dev/null; then
 fi
 
 # ═══════════════════════════════════════════════════════
+# STATE MACHINE: enforce store_memory after git commit
+# ═══════════════════════════════════════════════════════
+
+# Check if there's a pending memory from a previous commit
+if [ -f /tmp/contextify-pending-memory ]; then
+    if [ "$TOOL_NAME" = "mcp__contextify__store_memory" ]; then
+        # Good — memory stored after commit
+        rm -f /tmp/contextify-pending-memory
+    else
+        # VIOLATION: something else ran after commit instead of store_memory
+        echo ""
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "⛔ [Contextify] VIOLATION: You ran '$TOOL_NAME' after a git commit"
+        echo "   without calling store_memory first!"
+        echo ""
+        echo "   STOP what you are doing. Call store_memory NOW with:"
+        echo "   - What was committed and why"
+        echo "   - type: fix | decision | code_pattern | workflow"
+        echo "   - importance: 0.7+"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo ""
+        # Keep the flag so it keeps nagging
+    fi
+fi
+
+# ═══════════════════════════════════════════════════════
 # STORE triggers — you just did something worth remembering
 # ═══════════════════════════════════════════════════════
 
 # --- Git commit detected ---
 if [ "$TOOL_NAME" = "Bash" ] && echo "$TOOL_INPUT" | grep -qE 'git commit'; then
+    touch /tmp/contextify-pending-memory
     echo ""
-    echo "[Contextify] ⚠️  GIT COMMIT DETECTED — MEMORY STORAGE IS REQUIRED"
-    echo "[Contextify] You MUST call store_memory RIGHT NOW with:"
-    echo "[Contextify]   • title: what was committed"
-    echo "[Contextify]   • content: detailed description of the change and why"
-    echo "[Contextify]   • type: fix | decision | code_pattern | workflow"
-    echo "[Contextify]   • importance: 0.7+ for fixes, 0.8+ for architecture decisions"
-    echo "[Contextify] Do NOT continue working until you have stored this memory."
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "🔴 [Contextify] COMMIT DETECTED — store_memory is REQUIRED"
+    echo ""
+    echo "   Your NEXT action MUST be store_memory."
+    echo "   Do NOT proceed to any other task until memory is stored."
+    echo "   • title: what was committed"
+    echo "   • content: detailed description of the change and why"
+    echo "   • type: fix | decision | code_pattern | workflow"
+    echo "   • importance: 0.7+ for fixes, 0.8+ for architecture decisions"
+    echo "═══════════════════════════════════════════════════════════════"
     echo ""
 fi
 
@@ -210,7 +246,17 @@ fi
 exit 0
 `
 
+// ConfigureClaudeCode sets up Claude Code for Contextify (idempotent, skips existing).
 func ConfigureClaudeCode(mcpURL string) error {
+	return configureClaudeCode(mcpURL, false)
+}
+
+// UpdateClaudeCode force-overwrites hooks and CLAUDE.md prompt with latest versions.
+func UpdateClaudeCode(mcpURL string) error {
+	return configureClaudeCode(mcpURL, true)
+}
+
+func configureClaudeCode(mcpURL string, force bool) error {
 	settingsPath := expandPath("~/.claude/settings.json")
 	claudeMDPath := expandPath("~/.claude/CLAUDE.md")
 	hooksDir := expandPath("~/.contextify/hooks")
@@ -224,7 +270,7 @@ func ConfigureClaudeCode(mcpURL string) error {
 		return err
 	}
 
-	// 2. Install hooks
+	// 2. Install hooks (always overwrite on force)
 	if err := os.MkdirAll(hooksDir, 0755); err != nil {
 		return err
 	}
@@ -245,7 +291,11 @@ func ConfigureClaudeCode(mcpURL string) error {
 		return err
 	}
 
-	// 3. Append memory instructions to CLAUDE.md
+	// 3. CLAUDE.md memory instructions
+	if force {
+		// Remove old block and re-append with latest content
+		_ = removeClaudeMDBlock(claudeMDPath)
+	}
 	if err := appendClaudeMD(claudeMDPath, claudeCodePrompt); err != nil {
 		return err
 	}

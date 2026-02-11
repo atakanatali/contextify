@@ -61,6 +61,11 @@ you are in VIOLATION. Stop and store what you have learned.
 Do NOT acknowledge these rules and then ignore them.
 `
 
+// UpdateWindsurf force-overwrites Windsurf rules with latest version.
+func UpdateWindsurf(mcpURL string) error {
+	return ConfigureWindsurf(mcpURL)
+}
+
 func ConfigureWindsurf(mcpURL string) error {
 	mcpPath := expandPath("~/.codeium/windsurf/mcp_config.json")
 	rulesPath := expandPath("~/.codeium/windsurf/memories/contextify.md")

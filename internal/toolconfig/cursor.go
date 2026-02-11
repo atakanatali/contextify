@@ -61,6 +61,11 @@ you are in VIOLATION. Stop and store what you have learned.
 Do NOT acknowledge these rules and then ignore them.
 `
 
+// UpdateCursor force-overwrites Cursor rules with latest version.
+func UpdateCursor(mcpURL string) error {
+	return ConfigureCursor(mcpURL)
+}
+
 func ConfigureCursor(mcpURL string) error {
 	mcpPath := expandPath("~/.cursor/mcp.json")
 	rulesPath := expandPath("~/.cursor/rules/contextify.md")

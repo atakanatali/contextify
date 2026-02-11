@@ -6,6 +6,7 @@ import (
 
 	"github.com/atakanatali/contextify/internal/client"
 	"github.com/atakanatali/contextify/internal/docker"
+	"github.com/atakanatali/contextify/internal/toolconfig"
 	"github.com/spf13/cobra"
 )
 
@@ -75,6 +76,26 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	if err := waitForHealthWithProgress(c, 60*time.Second); err != nil {
 		printWarn("Container started but health check timed out. Check logs with 'contextify logs'.")
 		return nil
+	}
+
+	// 6. Update tool configurations (hooks, prompts, rules)
+	printHeader("Updating Tool Configurations")
+	mcpURL := getServerURL() + "/mcp"
+	updatedTools, err := toolconfig.UpdateConfiguredTools(mcpURL)
+	if err != nil {
+		printWarn(fmt.Sprintf("Some tool configs failed to update: %v", err))
+	}
+	if len(updatedTools) > 0 {
+		for _, t := range updatedTools {
+			tool := toolconfig.ToolByName(string(t))
+			label := string(t)
+			if tool != nil {
+				label = tool.Label
+			}
+			printOK(fmt.Sprintf("%s configs updated.", label))
+		}
+	} else {
+		printInfo("No configured tools found to update.")
 	}
 
 	printOK("Contextify updated successfully!")

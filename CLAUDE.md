@@ -25,6 +25,19 @@ When the user requests a release (e.g. "release v0.5.0"), before triggering the 
 2. Commit the updated `CHANGELOG.md` as part of the release PR.
 3. This must be merged to `main` **before** triggering the release workflow.
 
+## Memory Protocol (MANDATORY)
+
+After EVERY `git commit`, you MUST immediately call `store_memory` before doing anything else.
+This is not optional. Do NOT proceed to the next task, PR creation, or any other action until `store_memory` is called.
+
+- **type**: fix | decision | code_pattern | workflow
+- **tags**: include project name, technology, category
+- **importance**: 0.7+ for commits, 0.8+ for architecture decisions
+- **agent_source**: "claude-code"
+- **project_id**: current working directory
+
+Violation: If you run any tool after `git commit` that is not `store_memory`, you are in violation.
+
 ## Commit Convention
 
 Use conventional commits: `feat:`, `fix:`, `ci:`, `refactor:`, `docs:`, `chore:`, `test:`
