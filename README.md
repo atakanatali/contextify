@@ -1,9 +1,14 @@
 # Contextify
 
 <p align="center">
-  <img width="456" height="456" alt="Cachify Logo" src="https://github.com/user-attachments/assets/bb64c170-d4e0-4f09-9f60-467bd9f043f8" />
+  <img width="456" height="456" alt="Contextify Logo" src="https://github.com/user-attachments/assets/bb64c170-d4e0-4f09-9f60-467bd9f043f8" />
 </p>
 
+<p align="center">
+  <a href="https://github.com/atakanatali/contextify/pkgs/container/contextify"><img src="https://img.shields.io/badge/ghcr.io-contextify-blue?logo=docker" alt="Docker Image"></a>
+  <a href="https://github.com/atakanatali/contextify/releases"><img src="https://img.shields.io/github/v/release/atakanatali/contextify" alt="GitHub Release"></a>
+  <a href="https://github.com/atakanatali/contextify/blob/main/LICENSE"><img src="https://img.shields.io/github/license/atakanatali/contextify" alt="License"></a>
+</p>
 
 Unified memory system for AI agents. Provides shared short-term and long-term memory across Claude Code, Cursor, Gemini, Antigravity, and any other AI tool.
 
@@ -26,7 +31,18 @@ Unified memory system for AI agents. Provides shared short-term and long-term me
 
 ## Quick Start
 
+Download [`docker-compose.prod.yml`](https://github.com/atakanatali/contextify/releases/latest/download/docker-compose.prod.yml) and run:
+
 ```bash
+curl -fsSL https://github.com/atakanatali/contextify/releases/latest/download/docker-compose.prod.yml -o docker-compose.yml
+docker compose up
+```
+
+Or for development (build from source):
+
+```bash
+git clone https://github.com/atakanatali/contextify.git
+cd contextify
 docker compose up
 ```
 
