@@ -5,29 +5,59 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/atakanatali/contextify/pkgs/container/contextify"><img src="https://img.shields.io/badge/ghcr.io-contextify-blue?logo=docker" alt="Docker Image"></a>
-  <a href="https://github.com/atakanatali/contextify/releases"><img src="https://img.shields.io/github/v/release/atakanatali/contextify" alt="GitHub Release"></a>
-  <a href="https://github.com/atakanatali/contextify/blob/main/LICENSE"><img src="https://img.shields.io/github/license/atakanatali/contextify" alt="License"></a>
+  <a href="https://github.com/atakanatali/contextify/actions/workflows/release.yml">
+    <img src="https://github.com/atakanatali/contextify/actions/workflows/release.yml/badge.svg" alt="Publish" />
+  </a>
+  <a href="https://github.com/atakanatali/contextify/releases">
+    <img src="https://img.shields.io/github/v/release/atakanatali/contextify?include_prereleases" alt="Release" />
+  </a>
+  <a href="https://github.com/atakanatali/contextify/pkgs/container/contextify">
+    <img src="https://img.shields.io/badge/ghcr.io-contextify-blue?logo=docker" alt="Docker Image" />
+  </a>
+  <a href="https://github.com/atakanatali/contextify/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/atakanatali/contextify" alt="License" />
+  </a>
 </p>
 
 Unified memory system for AI agents. Provides shared short-term and long-term memory across Claude Code, Cursor, Gemini, Antigravity, and any other AI tool.
 
-## Architecture
+## Core Architecture
 
+```mermaid
+graph TB
+    subgraph Agents["AI Agents"]
+        CC[Claude Code]
+        CU[Cursor]
+        GE[Gemini]
+        AG[Antigravity]
+    end
+
+    subgraph Contextify["Contextify :8420"]
+        MCP[MCP Server]
+        REST[REST API]
+        WEB[Web UI]
+        SVC[Memory Service]
+    end
+
+    subgraph Storage["Data Layer"]
+        PG[(PostgreSQL + pgvector)]
+        OL[Ollama Embeddings]
+    end
+
+    CC & CU -->|MCP| MCP
+    GE & AG -->|REST| REST
+    WEB -.-> REST
+    MCP & REST --> SVC
+    SVC --> PG & OL
+
+    style MCP fill:#4f46e5,color:#fff
+    style REST fill:#059669,color:#fff
+    style WEB fill:#d97706,color:#fff
+    style PG fill:#2563eb,color:#fff
+    style OL fill:#7c3aed,color:#fff
 ```
-┌──────────────────────────────────────────────┐
-│                Docker Compose                │
-│                                              │
-│  PostgreSQL+pgvector       Ollama            │
-│     :5432                   :11434           │
-│         └─────────┬─────────┘                │
-│            Contextify Server                 │
-│            (Go) :8420                        │
-│            MCP + REST API + Web UI           │
-└──────────────┬───────────────────────────────┘
-               │
-     AI Agents (MCP or REST)
-```
+
+> For detailed technical documentation, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Quick Start
 

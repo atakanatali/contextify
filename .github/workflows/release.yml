@@ -1,9 +1,12 @@
-name: Release
+name: Publish to GHCR
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 1.0.0)'
+        required: true
+        type: string
 
 env:
   REGISTRY: ghcr.io
@@ -14,10 +17,24 @@ permissions:
   packages: write
 
 jobs:
-  build:
+  publish:
+    name: Build & Publish
+    if: github.repository_owner == 'atakanatali'
     runs-on: ubuntu-latest
+    environment: docker-prod
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set Version
+        id: version
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Release version: ${VERSION}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -29,19 +46,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.version.outputs.VERSION }}
+            type=raw,value=latest
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -55,16 +67,42 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  release:
-    needs: [build]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      - name: Create Git Tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ steps.version.outputs.VERSION }}" -m "Release v${{ steps.version.outputs.VERSION }}"
+          git push origin "v${{ steps.version.outputs.VERSION }}"
 
-      - name: Create GitHub Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          tag_name: v${{ steps.version.outputs.VERSION }}
+          name: Contextify v${{ steps.version.outputs.VERSION }}
+          body: |
+            ## Contextify v${{ steps.version.outputs.VERSION }}
+
+            ### Docker Image
+            ```bash
+            docker pull ghcr.io/atakanatali/contextify:${{ steps.version.outputs.VERSION }}
+            ```
+
+            ### Quick Start
+            ```bash
+            curl -fsSL https://github.com/atakanatali/contextify/releases/latest/download/docker-compose.prod.yml -o docker-compose.yml
+            docker compose up
+            ```
+
+            ### What's Included
+            - Contextify Server (Go) — MCP + REST API + Web UI
+            - PostgreSQL 16 + pgvector (HNSW index, 768d embeddings)
+            - Ollama + nomic-embed-text (local embeddings)
+            - Hybrid search (0.7 vector + 0.3 keyword)
+            - TTL-based memory lifecycle with auto-promotion
+
+            See [ARCHITECTURE.md](https://github.com/atakanatali/contextify/blob/main/ARCHITECTURE.md) for technical details.
+          draft: false
+          prerelease: false
           files: docker-compose.prod.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
