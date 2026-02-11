@@ -1,45 +1,16 @@
+# Contextify — Production (All-in-One Image)
+# PostgreSQL + pgvector, Ollama + nomic-embed-text, Go server + Web UI
+# All bundled in a single image. Just run: docker compose -f docker-compose.prod.yml up
+
 services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    environment:
-      POSTGRES_DB: contextify
-      POSTGRES_USER: contextify
-      POSTGRES_PASSWORD: contextify_local
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U contextify"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_models:/root/.ollama
-    restart: unless-stopped
-
-  server:
+  contextify:
+    container_name: contextify
     image: ghcr.io/atakanatali/contextify:latest
     ports:
       - "8420:8420"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      ollama:
-        condition: service_started
-    environment:
-      DATABASE_URL: postgres://contextify:contextify_local@postgres:5432/contextify?sslmode=disable
-      OLLAMA_URL: http://ollama:11434
-      EMBEDDING_MODEL: nomic-embed-text
-      SERVER_PORT: "8420"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
 
 volumes:
   pgdata:
-  ollama_models:

@@ -1,0 +1,122 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build & Verify
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build -o contextify ./cmd/server
+
+  health-check:
+    name: Health Check
+    runs-on: ubuntu-latest
+    needs: build
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: contextify
+          POSTGRES_USER: contextify
+          POSTGRES_PASSWORD: contextify_local
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U contextify"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      ollama:
+        image: ollama/ollama:latest
+        ports:
+          - 11434:11434
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build server
+        run: go build -o contextify ./cmd/server
+
+      - name: Create pgvector extension
+        env:
+          PGPASSWORD: contextify_local
+        run: |
+          psql -h 127.0.0.1 -U contextify -d contextify -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+          psql -h 127.0.0.1 -U contextify -d contextify -c 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
+
+      - name: Start server
+        env:
+          DATABASE_URL: postgres://contextify:contextify_local@127.0.0.1:5432/contextify?sslmode=disable
+          OLLAMA_URL: http://127.0.0.1:11434
+          EMBEDDING_MODEL: nomic-embed-text
+          SERVER_PORT: "8420"
+        run: |
+          ./contextify &
+          SERVER_PID=$!
+          echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
+
+      - name: Wait for healthy
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8420/health > /dev/null 2>&1; then
+              echo "Server is healthy"
+              exit 0
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 2
+          done
+          echo "Server did not become healthy"
+          exit 1
+
+      - name: Verify endpoints
+        run: |
+          echo "=== Health ==="
+          curl -sf http://localhost:8420/health | head -c 200
+          echo ""
+
+          echo "=== Stats ==="
+          curl -sf http://localhost:8420/api/v1/stats | head -c 200
+          echo ""
+
+          echo "=== MCP Initialize ==="
+          RESP=$(curl -sf -X POST http://localhost:8420/mcp \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci-test","version":"1.0"}}}')
+          echo "$RESP" | head -c 500
+          echo ""
+
+          echo "All endpoints responding."
+
+      - name: Stop server
+        if: always()
+        run: kill $SERVER_PID 2>/dev/null || true

@@ -1,3 +1,7 @@
+# Contextify — Development (Separate Services)
+# Each service runs independently for fast iteration.
+# For production (all-in-one), use: docker compose -f docker-compose.prod.yml up
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -25,6 +29,7 @@ services:
     restart: unless-stopped
 
   server:
+    container_name: contextify
     build:
       context: .
       dockerfile: Dockerfile

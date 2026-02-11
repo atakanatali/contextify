@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -26,18 +27,37 @@ func Connect(ctx context.Context, cfg config.DatabaseConfig) (*pgxpool.Pool, err
 	poolCfg.MinConns = int32(cfg.MaxIdleConns)
 	poolCfg.MaxConnLifetime = cfg.ConnMaxLifetime
 
-	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
-	if err != nil {
-		return nil, fmt.Errorf("create connection pool: %w", err)
+	const maxRetries = 10
+
+	var pool *pgxpool.Pool
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		pool, err = pgxpool.NewWithConfig(ctx, poolCfg)
+		if err != nil {
+			slog.Warn("database connection failed, retrying...", "attempt", attempt, "max", maxRetries, "error", err)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt) * time.Second):
+			}
+			continue
+		}
+
+		if err = pool.Ping(ctx); err != nil {
+			pool.Close()
+			slog.Warn("database ping failed, retrying...", "attempt", attempt, "max", maxRetries, "error", err)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt) * time.Second):
+			}
+			continue
+		}
+
+		slog.Info("connected to PostgreSQL", "url", maskURL(cfg.URL))
+		return pool, nil
 	}
 
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("ping database: %w", err)
-	}
-
-	slog.Info("connected to PostgreSQL", "url", maskURL(cfg.URL))
-	return pool, nil
+	return nil, fmt.Errorf("failed to connect to database after %d attempts: %w", maxRetries, err)
 }
 
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {

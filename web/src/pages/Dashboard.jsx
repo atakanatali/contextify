@@ -1,84 +1,250 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../api'
+import { TypeBadge, ImportanceDot, TtlBadge } from '../components/Badge'
+import { StatCard as SkeletonStatCard, MemoryCard as SkeletonMemoryCard } from '../components/Skeleton'
+import EmptyState from '../components/EmptyState'
+
+const STAT_ICONS = [
+  { key: 'total', icon: '🧠', label: 'Total Memories', color: 'from-brand-600 to-brand-700' },
+  { key: 'longterm', icon: '💎', label: 'Long-term', color: 'from-emerald-600 to-emerald-700' },
+  { key: 'shortterm', icon: '⏳', label: 'Short-term', color: 'from-amber-600 to-amber-700' },
+  { key: 'expiring', icon: '🔥', label: 'Expiring Soon', color: 'from-red-600 to-red-700' },
+]
+
+const TYPE_COLORS = {
+  solution: 'bg-emerald-500',
+  problem: 'bg-red-500',
+  code_pattern: 'bg-blue-500',
+  fix: 'bg-amber-500',
+  error: 'bg-rose-500',
+  workflow: 'bg-purple-500',
+  decision: 'bg-orange-500',
+  general: 'bg-gray-500',
+}
+
+function timeAgo(dateStr) {
+  if (!dateStr) return ''
+  const seconds = Math.floor((Date.now() - new Date(dateStr)) / 1000)
+  if (seconds < 60) return 'just now'
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
+  if (seconds < 604800) return `${Math.floor(seconds / 86400)}d ago`
+  return new Date(dateStr).toLocaleDateString()
+}
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null)
+  const [recent, setRecent] = useState(null)
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    api.getStats().then(setStats).catch((e) => setError(e.message))
+    api.getStats()
+      .then(setStats)
+      .catch((e) => setError(e.message))
+
+    api.listMemories({ limit: 5 })
+      .then(results => setRecent(results?.map(r => r.memory) || []))
+      .catch(() => {}) // non-critical
   }, [])
 
   if (error) {
     return (
-      <div className="text-red-400 bg-red-900/20 border border-red-800 rounded p-4">
-        Failed to load stats: {error}
+      <div className="text-red-400 bg-red-900/20 border border-red-800 rounded-lg p-4 animate-fade-in">
+        <span className="font-medium">Failed to load stats:</span> {error}
       </div>
     )
   }
 
-  if (!stats) {
-    return <div className="text-gray-500">Loading...</div>
-  }
-
   return (
-    <div>
-      <h2 className="text-2xl font-bold mb-6">Dashboard</h2>
+    <div className="space-y-8 animate-fade-in">
+      {/* Stat cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {!stats ? (
+          Array.from({ length: 4 }).map((_, i) => <SkeletonStatCard key={i} />)
+        ) : (
+          STAT_ICONS.map(({ key, icon, label, color }) => {
+            const value = key === 'total' ? stats.total_memories
+              : key === 'longterm' ? stats.long_term_count
+              : key === 'shortterm' ? stats.short_term_count
+              : stats.expiring_count
 
-      {/* Stats grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <StatCard label="Total Memories" value={stats.total_memories} />
-        <StatCard label="Long-term" value={stats.long_term_count} color="text-indigo-400" />
-        <StatCard label="Short-term" value={stats.short_term_count} color="text-yellow-400" />
-        <StatCard label="Expiring Soon" value={stats.expiring_count} color="text-red-400" />
+            return (
+              <div key={key} className="card p-5">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${color} flex items-center justify-center text-lg shadow-lg`}>
+                    {icon}
+                  </div>
+                  <span className="text-xs text-gray-500 uppercase tracking-wider font-medium">{label}</span>
+                </div>
+                <div className="text-3xl font-bold text-white tabular-nums">{value}</div>
+              </div>
+            )
+          })
+        )}
       </div>
 
-      {/* Breakdown */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <BreakdownCard title="By Type" data={stats.by_type} />
-        <BreakdownCard title="By Scope" data={stats.by_scope} />
-        <BreakdownCard title="By Agent" data={stats.by_agent} />
+      {/* Quick actions */}
+      <div className="flex flex-wrap gap-3">
+        <Link to="/memories" className="btn-primary">
+          <span>＋</span> Store Memory
+        </Link>
+        <Link to="/search" className="btn-ghost border border-border">
+          <span>🔍</span> Search Memories
+        </Link>
+      </div>
+
+      {/* Main content grid */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        {/* Type distribution */}
+        <div className="card p-5 xl:col-span-1">
+          <h3 className="text-sm font-semibold text-gray-300 mb-4 uppercase tracking-wider">By Type</h3>
+          {stats ? (
+            <TypeDistribution data={stats.by_type} />
+          ) : (
+            <div className="space-y-3">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="h-6 bg-surface-2 rounded animate-pulse-soft" />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Breakdowns */}
+        <div className="card p-5">
+          <h3 className="text-sm font-semibold text-gray-300 mb-4 uppercase tracking-wider">By Scope</h3>
+          {stats ? (
+            <BreakdownBars data={stats.by_scope} />
+          ) : (
+            <div className="space-y-3">
+              {Array.from({ length: 2 }).map((_, i) => (
+                <div key={i} className="h-6 bg-surface-2 rounded animate-pulse-soft" />
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="card p-5">
+          <h3 className="text-sm font-semibold text-gray-300 mb-4 uppercase tracking-wider">By Agent</h3>
+          {stats ? (
+            <BreakdownBars data={stats.by_agent} />
+          ) : (
+            <div className="space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-6 bg-surface-2 rounded animate-pulse-soft" />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Recent memories */}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">Recent Memories</h3>
+          <Link to="/memories" className="text-xs text-brand-400 hover:text-brand-300 transition-colors">
+            View all →
+          </Link>
+        </div>
+
+        {recent === null ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {Array.from({ length: 3 }).map((_, i) => <SkeletonMemoryCard key={i} />)}
+          </div>
+        ) : recent.length === 0 ? (
+          <EmptyState
+            icon="🧠"
+            title="No memories yet"
+            description="Store your first memory to get started."
+            action={<Link to="/memories" className="btn-primary text-sm">＋ Store Memory</Link>}
+          />
+        ) : (
+          <div className="space-y-2">
+            {recent.map(mem => (
+              <Link
+                key={mem.id}
+                to="/memories"
+                className="card-hover p-3 flex items-center gap-4 group"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <h4 className="text-sm font-medium text-white truncate">{mem.title}</h4>
+                    <TypeBadge type={mem.type} />
+                  </div>
+                  <p className="text-xs text-gray-500 truncate">{mem.content}</p>
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <ImportanceDot value={mem.importance} />
+                  <TtlBadge ttlSeconds={mem.ttl_seconds} />
+                  <span className="text-xs text-gray-600">{timeAgo(mem.created_at)}</span>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
 }
 
-function StatCard({ label, value, color = 'text-white' }) {
-  return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-      <div className="text-gray-400 text-xs uppercase tracking-wide mb-1">{label}</div>
-      <div className={`text-3xl font-bold ${color}`}>{value}</div>
-    </div>
-  )
-}
-
-function BreakdownCard({ title, data }) {
+function TypeDistribution({ data }) {
   const entries = Object.entries(data || {}).sort((a, b) => b[1] - a[1])
   const total = entries.reduce((sum, [, v]) => sum + v, 0)
 
+  if (entries.length === 0) {
+    return <div className="text-gray-600 text-sm">No data</div>
+  }
+
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-      <h3 className="text-sm font-medium text-gray-300 mb-3">{title}</h3>
-      {entries.length === 0 ? (
-        <div className="text-gray-600 text-sm">No data</div>
-      ) : (
-        <div className="space-y-2">
-          {entries.map(([key, count]) => (
-            <div key={key}>
-              <div className="flex justify-between text-xs mb-1">
-                <span className="text-gray-400">{key}</span>
-                <span className="text-gray-500">{count}</span>
-              </div>
-              <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-indigo-500 rounded-full"
-                  style={{ width: `${total ? (count / total) * 100 : 0}%` }}
-                />
-              </div>
+    <div className="space-y-3">
+      {entries.map(([type, count]) => {
+        const pct = total ? (count / total) * 100 : 0
+        return (
+          <div key={type} className="group">
+            <div className="flex items-center justify-between text-xs mb-1.5">
+              <span className="text-gray-400 capitalize">{type.replace('_', ' ')}</span>
+              <span className="text-gray-500 tabular-nums">{count} <span className="text-gray-600">({pct.toFixed(0)}%)</span></span>
             </div>
-          ))}
-        </div>
-      )}
+            <div className="h-2 bg-surface-2 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-700 ${TYPE_COLORS[type] || 'bg-gray-500'}`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function BreakdownBars({ data }) {
+  const entries = Object.entries(data || {}).sort((a, b) => b[1] - a[1])
+  const total = entries.reduce((sum, [, v]) => sum + v, 0)
+
+  if (entries.length === 0) {
+    return <div className="text-gray-600 text-sm">No data</div>
+  }
+
+  return (
+    <div className="space-y-4">
+      {entries.map(([key, count]) => {
+        const pct = total ? (count / total) * 100 : 0
+        return (
+          <div key={key}>
+            <div className="flex items-center justify-between text-xs mb-1.5">
+              <span className="text-gray-400">{key}</span>
+              <span className="text-gray-500 tabular-nums">{count}</span>
+            </div>
+            <div className="h-2 bg-surface-2 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-brand-500 rounded-full transition-all duration-700"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }

@@ -1,0 +1,46 @@
+name: Restrict .github changes
+
+on:
+  pull_request:
+    paths:
+      - '.github/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/**'
+
+jobs:
+  check-github-changes:
+    name: Check .github modifications
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for .github changes
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+            HEAD="${{ github.sha }}"
+          fi
+
+          CHANGED=$(git diff --name-only "$BASE" "$HEAD" -- .github/ || true)
+
+          if [ -z "$CHANGED" ]; then
+            echo "No .github changes detected."
+            exit 0
+          fi
+
+          echo "::error::.github directory modifications require admin approval."
+          echo ""
+          echo "Changed files:"
+          echo "$CHANGED"
+          echo ""
+          echo "Only repository admins can bypass this restriction via branch protection rules."
+          exit 1

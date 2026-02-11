@@ -38,6 +38,19 @@ export const api = {
       body: JSON.stringify({ query, ...filters }),
     }),
 
+  // List memories with pagination (uses search with a broad query)
+  listMemories: ({ query = '*', type, scope, limit = 20, offset = 0, sort } = {}) =>
+    request('/memories/search', {
+      method: 'POST',
+      body: JSON.stringify({
+        query: query || '*',
+        ...(type && { type }),
+        ...(scope && { scope }),
+        limit,
+        offset,
+      }),
+    }),
+
   getRelated: (id) => request(`/memories/${id}/related`),
 
   createRelationship: (data) =>

@@ -139,9 +139,12 @@ contextify/
 │   │   ├── pages/               # Dashboard, MemoryBrowser, Search
 │   │   └── components/          # Layout, MemoryCard
 │   └── ...
-├── Dockerfile                   # 3-stage: Node build + Go build + Alpine
-├── docker-compose.yml           # Development (build from source)
-└── docker-compose.prod.yml      # Production (GHCR images)
+├── Dockerfile                   # Dev image: Go server + Web UI (3-stage)
+├── Dockerfile.allinone          # Prod image: PG + Ollama + model + server + UI
+├── docker/
+│   └── entrypoint.sh            # All-in-one process manager (PG → Ollama → server)
+├── docker-compose.yml           # Development (separate services)
+└── docker-compose.prod.yml      # Production (single all-in-one container)
 ```
 
 ## Database Schema
@@ -269,7 +272,7 @@ Configuration is loaded from `config.yaml` with environment variable overrides:
 
 | Env Var | Config Path | Default | Description |
 |---------|-------------|---------|-------------|
-| `DATABASE_URL` | `database.url` | — | PostgreSQL connection string |
+| `DATABASE_URL` | `database.url` | `postgres://contextify:contextify_local@localhost:5432/contextify?sslmode=disable` | PostgreSQL connection string |
 | `OLLAMA_URL` | `embedding.ollama_url` | `http://localhost:11434` | Ollama server URL |
 | `EMBEDDING_MODEL` | `embedding.model` | `nomic-embed-text` | Embedding model name |
 | `SERVER_PORT` | `server.port` | `8420` | HTTP server port |
@@ -287,3 +290,32 @@ Configuration is loaded from `config.yaml` with environment variable overrides:
 | `search.keyword_weight` | 0.3 | Keyword matching weight in hybrid search |
 | `search.default_limit` | 20 | Default search result limit |
 | `search.max_limit` | 100 | Maximum search result limit |
+
+## Deployment
+
+### All-in-One Image (Production)
+
+The production Docker image (`Dockerfile.allinone`) bundles everything into a single container:
+
+| Component | Details |
+|-----------|---------|
+| **PostgreSQL 16 + pgvector** | Listens on `127.0.0.1:5432` (internal only) |
+| **Ollama** | Listens on `127.0.0.1:11434` (internal only) |
+| **nomic-embed-text** | Pre-pulled at build time (~274MB, zero first-run downloads) |
+| **Contextify Server** | Go binary + Web UI static files |
+
+**Base image**: `pgvector/pgvector:pg16` (Debian Bookworm)
+
+**Process management**: Bash entrypoint script (`docker/entrypoint.sh`) with PID tracking and `trap SIGTERM` for graceful shutdown. Startup order: PostgreSQL → Ollama → Contextify.
+
+**Volume**: Only PostgreSQL data (`/var/lib/postgresql/data`) needs persistence. Everything else is baked into the image.
+
+**Estimated image size**: ~750MB (pgvector base ~400MB + Ollama ~50MB + model ~274MB + Go+web ~30MB)
+
+### Development Setup
+
+Development uses separate containers (`docker-compose.yml`) for fast iteration. The Go server is built from source using the lightweight `Dockerfile` (Alpine-based, no PG/Ollama).
+
+### Connection Retry
+
+The Go server includes connection retry logic (10 attempts, linear backoff) to handle the startup delay when PostgreSQL and Ollama initialize inside the same container.
