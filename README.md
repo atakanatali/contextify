@@ -63,48 +63,79 @@ graph TB
 
 ## Quick Start
 
-One command to set up everything — the interactive wizard starts Contextify, asks which AI tools you use, and configures them:
+Install the CLI and set up everything in two commands:
 
 ```bash
-git clone https://github.com/atakanatali/contextify.git
-cd contextify
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/atakanatali/contextify/main/scripts/install-cli.sh | sh
+contextify install
 ```
 
-The wizard will:
-1. Start the Contextify Docker container (PostgreSQL + Ollama + server + Web UI)
+The install wizard will:
+1. Pull and start the Docker container (PostgreSQL + Ollama + server + Web UI)
 2. Ask which tools to configure: **Claude Code**, **Cursor**, **Windsurf**, **Gemini**
 3. Set up MCP/REST integration, hooks, and prompt rules for each selected tool
 4. Run a self-test to verify everything works
 
 ```
-  Which AI tools would you like to configure?
+  Contextify Install
+  ──────────────────
+  ✓ Docker is available.
+  ✓ Image pulled.
+  ✓ Container started.
+  ✓ Contextify is ready.
 
-    [1] Claude Code   ✓ configured
-    [2] Cursor        ○ not configured
-    [3] Windsurf      ○ not configured
-    [4] Gemini        ○ not configured
+  Select AI tools to configure:
 
-    [a] All of the above
-    [q] Quit
+  ✓ 1) Claude Code
+  ○ 2) Cursor
+  ○ 3) Windsurf
+  ✓ 4) Gemini
 
-  Select tools (e.g. 1,3 or a):
+  Enter numbers separated by spaces (e.g., 1 2 3), or 'all':
 ```
 
-Re-run anytime — the wizard skips already-completed steps.
-
-### Other install modes
+### CLI Commands
 
 ```bash
-./install.sh --tools claude-code,cursor    # Non-interactive, specific tools
-./install.sh --all                         # Non-interactive, all tools
-./install.sh --status                      # Show what's configured
-./install.sh --uninstall                   # Remove all configurations
+# Management
+contextify install                      # Full setup (pull, start, configure tools)
+contextify start                        # Start the container
+contextify stop                         # Stop the container
+contextify restart                      # Restart the container
+contextify update                       # Update to latest version
+contextify update -v 0.4.0              # Update to specific version
+contextify status                       # Show health, container, and tool status
+contextify logs                         # Show container logs
+contextify logs -f                      # Follow container logs
+contextify uninstall                    # Remove tool configurations
+contextify uninstall --remove-container # Also remove the Docker container
+contextify version                      # Show CLI version
+
+# Memory operations
+contextify store "Bug fix" -t fix -T redis,backend -i 0.8 -c "Fixed timeout issue"
+contextify recall "how to fix postgres connection"
+contextify search --type solution --tags docker
+contextify get <memory-id>
+contextify delete <memory-id>
+contextify promote <memory-id>
+contextify stats
+contextify context                      # Load project memories (auto-detects git repo)
+
+# Pipe support
+cat error.log | contextify store "Error log" --type error
+```
+
+### Non-interactive install
+
+```bash
+contextify install --tools claude-code,cursor    # Specific tools
+contextify install --all                         # All detected tools
+contextify install --all --no-test               # Skip self-test
 ```
 
 ### Manual Docker setup
 
-If you prefer to start the container yourself:
+If you prefer to start the container yourself without the CLI:
 
 ```bash
 docker run -d --name contextify -p 8420:8420 \
@@ -230,6 +261,7 @@ Each memory has:
 ## Tech Stack
 
 - **Server**: Go + official MCP Go SDK
+- **CLI**: Go + Cobra (single binary, cross-platform)
 - **Database**: PostgreSQL 16 + pgvector (HNSW index)
 - **Embeddings**: Ollama + nomic-embed-text (local, free)
 - **Web UI**: React + Vite + Tailwind CSS
