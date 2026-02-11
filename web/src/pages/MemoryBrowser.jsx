@@ -1,118 +1,218 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api'
 import MemoryCard from '../components/MemoryCard'
+import SearchBar from '../components/SearchBar'
+import Modal from '../components/Modal'
+import EmptyState from '../components/EmptyState'
+import StoreMemoryForm from '../components/StoreMemoryForm'
+import MemoryDetail from '../components/MemoryDetail'
+import { MemoryCard as SkeletonMemoryCard } from '../components/Skeleton'
 
-const TYPES = ['', 'solution', 'problem', 'code_pattern', 'fix', 'error', 'workflow', 'decision', 'general']
-const SCOPES = ['', 'global', 'project']
+const PAGE_SIZE = 12
 
 export default function MemoryBrowser() {
-  const [memories, setMemories] = useState([])
-  const [loading, setLoading] = useState(false)
+  const [results, setResults] = useState([])
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [filters, setFilters] = useState({ query: '', type: '', scope: '' })
+  const [query, setQuery] = useState('')
+  const [filters, setFilters] = useState({})
+  const [sort, setSort] = useState('relevance')
+  const [offset, setOffset] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
 
-  const search = async () => {
-    if (!filters.query) return
+  // Store memory modal
+  const [storeOpen, setStoreOpen] = useState(false)
+
+  // Detail modal
+  const [detailMemory, setDetailMemory] = useState(null)
+
+  const fetchMemories = useCallback(async (opts = {}) => {
+    const q = opts.query ?? query
+    const f = opts.filters ?? filters
+    const o = opts.offset ?? offset
     setLoading(true)
     setError(null)
     try {
-      const searchFilters = {}
-      if (filters.type) searchFilters.type = filters.type
-      if (filters.scope) searchFilters.scope = filters.scope
-      const results = await api.searchMemories(filters.query, searchFilters)
-      setMemories(results?.map((r) => r.memory) || [])
+      const data = await api.listMemories({
+        query: q || '*',
+        type: f.type,
+        scope: f.scope,
+        limit: PAGE_SIZE,
+        offset: o,
+        sort: opts.sort ?? sort,
+      })
+      const items = data || []
+      setResults(items)
+      setHasMore(items.length >= PAGE_SIZE)
     } catch (e) {
       setError(e.message)
     } finally {
       setLoading(false)
     }
+  }, [query, filters, offset, sort])
+
+  useEffect(() => {
+    fetchMemories()
+  }, []) // initial load
+
+  const handleSearch = () => {
+    setOffset(0)
+    fetchMemories({ offset: 0 })
   }
 
-  const handleDelete = async (id) => {
-    try {
-      await api.deleteMemory(id)
-      setMemories((prev) => prev.filter((m) => m.id !== id))
-    } catch (e) {
-      setError(e.message)
-    }
+  const handleFilterChange = (newFilters) => {
+    setFilters(newFilters)
+    setOffset(0)
+    fetchMemories({ filters: newFilters, offset: 0 })
   }
 
-  const handlePromote = async (id) => {
-    try {
-      await api.promoteMemory(id)
-      setMemories((prev) =>
-        prev.map((m) =>
-          m.id === id ? { ...m, ttl_seconds: null, expires_at: null } : m
-        )
-      )
-    } catch (e) {
-      setError(e.message)
-    }
+  const handleSortChange = (newSort) => {
+    setSort(newSort)
+    setOffset(0)
+    fetchMemories({ sort: newSort, offset: 0 })
+  }
+
+  const handlePrev = () => {
+    const newOffset = Math.max(0, offset - PAGE_SIZE)
+    setOffset(newOffset)
+    fetchMemories({ offset: newOffset })
+  }
+
+  const handleNext = () => {
+    const newOffset = offset + PAGE_SIZE
+    setOffset(newOffset)
+    fetchMemories({ offset: newOffset })
+  }
+
+  const handleDelete = (id) => {
+    setResults(prev => prev.filter(r => r.memory.id !== id))
+  }
+
+  const handlePromote = (id) => {
+    setResults(prev => prev.map(r =>
+      r.memory.id === id ? { ...r, memory: { ...r.memory, ttl_seconds: null, expires_at: null } } : r
+    ))
+  }
+
+  const handleMemoryCreated = () => {
+    setStoreOpen(false)
+    fetchMemories({ offset: 0 })
+    setOffset(0)
   }
 
   return (
-    <div>
-      <h2 className="text-2xl font-bold mb-6">Memories</h2>
-
-      {/* Filters */}
-      <div className="flex gap-3 mb-6">
-        <input
-          type="text"
-          placeholder="Search memories..."
-          value={filters.query}
-          onChange={(e) => setFilters({ ...filters, query: e.target.value })}
-          onKeyDown={(e) => e.key === 'Enter' && search()}
-          className="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-indigo-500 focus:outline-none"
-        />
-        <select
-          value={filters.type}
-          onChange={(e) => setFilters({ ...filters, type: e.target.value })}
-          className="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-300"
-        >
-          {TYPES.map((t) => (
-            <option key={t} value={t}>{t || 'All types'}</option>
-          ))}
-        </select>
-        <select
-          value={filters.scope}
-          onChange={(e) => setFilters({ ...filters, scope: e.target.value })}
-          className="bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-300"
-        >
-          {SCOPES.map((s) => (
-            <option key={s} value={s}>{s || 'All scopes'}</option>
-          ))}
-        </select>
-        <button
-          onClick={search}
-          disabled={loading || !filters.query}
-          className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-4 py-2 rounded text-sm font-medium"
-        >
-          {loading ? '...' : 'Search'}
+    <div className="space-y-6 animate-fade-in">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-white">Memories</h2>
+          <p className="text-sm text-gray-500 mt-0.5">Browse, search and manage your memories</p>
+        </div>
+        <button onClick={() => setStoreOpen(true)} className="btn-primary shrink-0">
+          <span>＋</span> New Memory
         </button>
       </div>
 
+      {/* Search */}
+      <SearchBar
+        value={query}
+        onChange={setQuery}
+        onSearch={handleSearch}
+        placeholder="Search memories by title, content or tags..."
+        showFilters
+        showSort
+        filters={filters}
+        onFilterChange={handleFilterChange}
+        sort={sort}
+        onSortChange={handleSortChange}
+        loading={loading}
+      />
+
+      {/* Error */}
       {error && (
-        <div className="text-red-400 bg-red-900/20 border border-red-800 rounded p-3 mb-4 text-sm">
+        <div className="text-red-400 bg-red-900/20 border border-red-800 rounded-lg p-3 text-sm animate-fade-in">
           {error}
         </div>
       )}
 
-      {/* Results */}
-      <div className="space-y-3">
-        {memories.length === 0 && !loading && (
-          <div className="text-gray-600 text-sm text-center py-12">
-            Search for memories to get started
+      {/* Results grid */}
+      {loading ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => <SkeletonMemoryCard key={i} />)}
+        </div>
+      ) : results.length === 0 ? (
+        <EmptyState
+          icon="📭"
+          title="No memories found"
+          description={query ? `No results for "${query}". Try different keywords or filters.` : 'Store your first memory to get started.'}
+          action={
+            <button onClick={() => setStoreOpen(true)} className="btn-primary text-sm">
+              ＋ Store Memory
+            </button>
+          }
+        />
+      ) : (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {results.map(r => (
+              <MemoryCard
+                key={r.memory.id}
+                memory={r.memory}
+                onClick={(mem) => setDetailMemory(mem)}
+                onDelete={handleDelete}
+                onPromote={handlePromote}
+                showScore={!!query.trim()}
+                score={r.score}
+              />
+            ))}
           </div>
-        )}
-        {memories.map((mem) => (
-          <MemoryCard
-            key={mem.id}
-            memory={mem}
+
+          {/* Pagination */}
+          <div className="flex items-center justify-between pt-4 border-t border-border">
+            <span className="text-xs text-gray-500">
+              Showing {offset + 1}–{offset + results.length}
+            </span>
+            <div className="flex gap-2">
+              <button
+                onClick={handlePrev}
+                disabled={offset === 0}
+                className="btn-ghost text-xs py-1.5 disabled:opacity-30"
+              >
+                ← Prev
+              </button>
+              <button
+                onClick={handleNext}
+                disabled={!hasMore}
+                className="btn-ghost text-xs py-1.5 disabled:opacity-30"
+              >
+                Next →
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Store Memory Modal */}
+      <Modal open={storeOpen} onClose={() => setStoreOpen(false)} title="Store Memory" size="lg">
+        <StoreMemoryForm onSuccess={handleMemoryCreated} onCancel={() => setStoreOpen(false)} />
+      </Modal>
+
+      {/* Detail Modal */}
+      <Modal
+        open={!!detailMemory}
+        onClose={() => setDetailMemory(null)}
+        title={detailMemory?.title || 'Memory Detail'}
+        size="lg"
+      >
+        {detailMemory && (
+          <MemoryDetail
+            memory={detailMemory}
+            onClose={() => setDetailMemory(null)}
             onDelete={handleDelete}
-            onPromote={handlePromote}
+            onRefresh={() => { setDetailMemory(null); fetchMemories() }}
           />
-        ))}
-      </div>
+        )}
+      </Modal>
     </div>
   )
 }
