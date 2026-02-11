@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ─── Contextify Installer ───
-# Sets up Contextify and configures all detected AI tools.
-# Usage: ./install.sh          (install)
-#        ./install.sh --uninstall  (remove)
+# ─── Contextify Setup Wizard ───
+# Interactive installer that configures Contextify for your AI tools.
+# Usage: ./install.sh                              (interactive wizard)
+#        ./install.sh --tools claude-code,cursor    (non-interactive)
+#        ./install.sh --all                         (configure all tools)
+#        ./install.sh --status                      (show config status)
+#        ./install.sh --uninstall                   (remove configs)
+#        ./install.sh --help                        (show help)
 
 CONTEXTIFY_URL="${CONTEXTIFY_URL:-http://localhost:8420}"
 CONTEXTIFY_MCP_URL="${CONTEXTIFY_URL}/mcp"
@@ -25,7 +29,91 @@ if [ -f "${SCRIPT_DIR}/scripts/lib/json-merge.sh" ]; then
     source "${SCRIPT_DIR}/scripts/lib/json-merge.sh"
 fi
 
-# ─── Phase 1: Prerequisites ───
+# ─── Status Check Functions ───
+
+check_docker_status() {
+    if curl -sf "${CONTEXTIFY_URL}/health" &>/dev/null; then
+        echo "running"
+    elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^contextify$'; then
+        echo "stopped"
+    else
+        echo "not-exists"
+    fi
+}
+
+check_claude_code_status() {
+    local settings="${HOME}/.claude/settings.json"
+    local claude_md="${HOME}/.claude/CLAUDE.md"
+    local has_mcp=false has_hooks=false has_md=false
+
+    json_has_key "$settings" "mcpServers.contextify" 2>/dev/null && has_mcp=true
+    if [ -f "$settings" ] && grep -q "session-start.sh" "$settings" 2>/dev/null; then
+        has_hooks=true
+    fi
+    if [ -f "$claude_md" ] && grep -qF "$CONTEXTIFY_MARKER" "$claude_md" 2>/dev/null; then
+        has_md=true
+    fi
+
+    if $has_mcp && $has_hooks && $has_md; then
+        echo "configured"
+    elif $has_mcp || $has_hooks || $has_md; then
+        echo "partial"
+    else
+        echo "not-configured"
+    fi
+}
+
+check_cursor_status() {
+    local mcp_file="${HOME}/.cursor/mcp.json"
+    local rules_file="${HOME}/.cursor/rules/contextify.md"
+    local has_mcp=false has_rules=false
+
+    json_has_key "$mcp_file" "mcpServers.contextify" 2>/dev/null && has_mcp=true
+    [ -f "$rules_file" ] && has_rules=true
+
+    if $has_mcp && $has_rules; then
+        echo "configured"
+    elif $has_mcp || $has_rules; then
+        echo "partial"
+    else
+        echo "not-configured"
+    fi
+}
+
+check_windsurf_status() {
+    local mcp_file="${HOME}/.codeium/windsurf/mcp_config.json"
+    local rules_file="${HOME}/.codeium/windsurf/memories/contextify.md"
+    local has_mcp=false has_rules=false
+
+    json_has_key "$mcp_file" "mcpServers.contextify" 2>/dev/null && has_mcp=true
+    [ -f "$rules_file" ] && has_rules=true
+
+    if $has_mcp && $has_rules; then
+        echo "configured"
+    elif $has_mcp || $has_rules; then
+        echo "partial"
+    else
+        echo "not-configured"
+    fi
+}
+
+check_gemini_status() {
+    if [ -f "${HOME}/.contextify/gemini-instructions.md" ]; then
+        echo "configured"
+    else
+        echo "not-configured"
+    fi
+}
+
+_status_label() {
+    case "$1" in
+        configured)     printf '\033[0;32m✓ configured\033[0m' ;;
+        partial)        printf '\033[0;33m◐ partial\033[0m' ;;
+        not-configured) printf '\033[0;90m○ not configured\033[0m' ;;
+    esac
+}
+
+# ─── Prerequisites ───
 check_prerequisites() {
     info "Checking prerequisites..."
 
@@ -58,7 +146,7 @@ check_prerequisites() {
     ok "Prerequisites met (docker, ${JSON_TOOL}, curl)"
 }
 
-# ─── Phase 2: Start Contextify ───
+# ─── Start Contextify ───
 start_contextify() {
     if curl -sf "${CONTEXTIFY_URL}/health" &>/dev/null; then
         ok "Contextify already running at ${CONTEXTIFY_URL}"
@@ -67,7 +155,6 @@ start_contextify() {
 
     info "Starting Contextify..."
 
-    # Check if container exists but is stopped
     if docker ps -a --format '{{.Names}}' | grep -q '^contextify$'; then
         docker start contextify &>/dev/null
     else
@@ -82,8 +169,13 @@ start_contextify() {
     ok "Contextify container started"
 }
 
-# ─── Phase 3: Health Check ───
+# ─── Health Check ───
 wait_for_health() {
+    if curl -sf "${CONTEXTIFY_URL}/health" &>/dev/null; then
+        ok "Contextify is healthy"
+        return 0
+    fi
+
     info "Waiting for Contextify to be healthy..."
     local max=60
     for i in $(seq 1 $max); do
@@ -100,29 +192,59 @@ wait_for_health() {
     done
 }
 
-# ─── Phase 4: Detect Tools ───
-DETECTED_TOOLS=()
+# ─── Interactive Tool Selection ───
+SELECTED_TOOLS=()
 
-detect_tools() {
-    info "Detecting AI tools..."
-
-    if [ -d "${HOME}/.claude" ] || command -v claude &>/dev/null; then
-        DETECTED_TOOLS+=("claude-code")
-        ok "Detected: Claude Code"
+interactive_tool_selection() {
+    if [ ! -t 0 ]; then
+        fail "Interactive mode requires a terminal."
+        fail "Use --tools claude-code,cursor,windsurf,gemini or --all for non-interactive mode."
+        exit 1
     fi
 
-    if [ -d "${HOME}/.cursor" ]; then
-        DETECTED_TOOLS+=("cursor")
-        ok "Detected: Cursor"
+    local claude_status cursor_status windsurf_status gemini_status
+    claude_status=$(check_claude_code_status)
+    cursor_status=$(check_cursor_status)
+    windsurf_status=$(check_windsurf_status)
+    gemini_status=$(check_gemini_status)
+
+    echo ""
+    echo "  Which AI tools would you like to configure?"
+    echo ""
+    printf "    [1] Claude Code   "; _status_label "$claude_status"; echo ""
+    printf "    [2] Cursor        "; _status_label "$cursor_status"; echo ""
+    printf "    [3] Windsurf      "; _status_label "$windsurf_status"; echo ""
+    printf "    [4] Gemini        "; _status_label "$gemini_status"; echo ""
+    echo ""
+    echo "    [a] All of the above"
+    echo "    [q] Quit"
+    echo ""
+    printf "  Select tools (e.g. 1,3 or a): "
+    read -r selection
+
+    SELECTED_TOOLS=()
+    selection=$(echo "$selection" | tr ',' ' ')
+    for item in $selection; do
+        case "$item" in
+            1) SELECTED_TOOLS+=("claude-code") ;;
+            2) SELECTED_TOOLS+=("cursor") ;;
+            3) SELECTED_TOOLS+=("windsurf") ;;
+            4) SELECTED_TOOLS+=("gemini") ;;
+            a|A|all) SELECTED_TOOLS=("claude-code" "cursor" "windsurf" "gemini"); break ;;
+            q|Q|quit) echo ""; info "Setup cancelled."; exit 0 ;;
+            *) warn "Unknown selection: $item (ignoring)" ;;
+        esac
+    done
+
+    if [ ${#SELECTED_TOOLS[@]} -eq 0 ]; then
+        warn "No tools selected. Nothing to configure."
+        exit 0
     fi
 
-    if [ ${#DETECTED_TOOLS[@]} -eq 0 ]; then
-        warn "No AI tools detected automatically."
-        warn "Manual setup: see README.md for Claude Code, Cursor, and Gemini instructions."
-    fi
+    echo ""
 }
 
-# ─── Phase 5: Configure Tools ───
+# ─── Configure Tools ───
 
 configure_claude_code() {
     info "Configuring Claude Code..."
@@ -224,36 +346,91 @@ configure_cursor() {
     # 2. Rules
     local rules_dir="${HOME}/.cursor/rules"
     mkdir -p "$rules_dir"
-    if [ -f "${SCRIPT_DIR}/prompts/cursorrules.md" ]; then
-        cp "${SCRIPT_DIR}/prompts/cursorrules.md" "${rules_dir}/contextify.md"
+    if [ -f "${rules_dir}/contextify.md" ]; then
+        ok "Cursor rules already installed (skipping)"
     else
-        cat > "${rules_dir}/contextify.md" << 'RULESEOF'
+        if [ -f "${SCRIPT_DIR}/prompts/cursorrules.md" ]; then
+            cp "${SCRIPT_DIR}/prompts/cursorrules.md" "${rules_dir}/contextify.md"
+        else
+            cat > "${rules_dir}/contextify.md" << 'RULESEOF'
 # Contextify Memory System
 At session start, call `get_context` with the current workspace path.
 Store memories when you fix bugs, discover patterns, or make decisions.
 Recall memories before tackling problems. Set `agent_source` to "cursor".
 RULESEOF
+        fi
+        ok "Installed Cursor rules to ${rules_dir}/contextify.md"
     fi
-    ok "Installed Cursor rules to ${rules_dir}/contextify.md"
+}
+
+configure_windsurf() {
+    info "Configuring Windsurf..."
+
+    # 1. MCP server
+    local mcp_file="${HOME}/.codeium/windsurf/mcp_config.json"
+    mkdir -p "${HOME}/.codeium/windsurf"
+
+    if json_has_key "$mcp_file" "mcpServers.contextify" 2>/dev/null; then
+        ok "MCP server already configured (skipping)"
+    else
+        json_set_nested "$mcp_file" "mcpServers.contextify" '{"serverUrl":"'"${CONTEXTIFY_MCP_URL}"'"}'
+        ok "Added MCP server to ${mcp_file}"
+    fi
+
+    # 2. Rules
+    local rules_dir="${HOME}/.codeium/windsurf/memories"
+    mkdir -p "$rules_dir"
+    if [ -f "${rules_dir}/contextify.md" ]; then
+        ok "Windsurf rules already installed (skipping)"
+    else
+        if [ -f "${SCRIPT_DIR}/prompts/windsurf.md" ]; then
+            cp "${SCRIPT_DIR}/prompts/windsurf.md" "${rules_dir}/contextify.md"
+        else
+            cat > "${rules_dir}/contextify.md" << 'RULESEOF'
+# Contextify Memory System
+At session start, call `get_context` with the current workspace path.
+Store memories when you fix bugs, discover patterns, or make decisions.
+Recall memories before tackling problems. Set `agent_source` to "windsurf".
+RULESEOF
+        fi
+        ok "Installed Windsurf rules to ${rules_dir}/contextify.md"
+    fi
+}
+
+configure_gemini() {
+    info "Configuring Gemini..."
+
+    local dest="${HOME}/.contextify/gemini-instructions.md"
+
+    if [ -f "$dest" ]; then
+        ok "Gemini instructions already installed (skipping)"
+    else
+        mkdir -p "${HOME}/.contextify"
+        if [ -f "${SCRIPT_DIR}/prompts/gemini.md" ]; then
+            cp "${SCRIPT_DIR}/prompts/gemini.md" "$dest"
+        else
+            cat > "$dest" << 'GEMINIEOF'
+# Contextify Memory System
+Use the REST API at http://localhost:8420/api/v1/ for memory operations.
+Set agent_source to "gemini".
+GEMINIEOF
+        fi
+        ok "Gemini instructions saved to ${dest}"
+    fi
 }
 
 configure_tools() {
-    for tool in "${DETECTED_TOOLS[@]}"; do
+    for tool in "${SELECTED_TOOLS[@]}"; do
         case "$tool" in
             claude-code) configure_claude_code ;;
-            cursor) configure_cursor ;;
+            cursor)      configure_cursor ;;
+            windsurf)    configure_windsurf ;;
+            gemini)      configure_gemini ;;
         esac
     done
-
-    # Always copy Gemini template if available
-    if [ -f "${SCRIPT_DIR}/prompts/gemini.md" ]; then
-        mkdir -p "${HOME}/.contextify"
-        cp "${SCRIPT_DIR}/prompts/gemini.md" "${HOME}/.contextify/gemini-instructions.md"
-        ok "Gemini prompt template saved to ~/.contextify/gemini-instructions.md"
-    fi
 }
 
-# ─── Phase 6: Self-test ───
+# ─── Self-test ───
 run_self_test() {
     info "Running self-test..."
 
@@ -305,22 +482,75 @@ run_self_test() {
     ok "Self-test passed!"
 }
 
-# ─── Phase 7: Summary ───
+# ─── Restart Tools ───
+restart_tools() {
+    local needs_restart=false
+
+    for tool in "${SELECTED_TOOLS[@]}"; do
+        case "$tool" in
+            cursor|windsurf) needs_restart=true; break ;;
+        esac
+    done
+
+    if ! $needs_restart; then
+        return 0
+    fi
+
+    echo ""
+    info "Restarting configured tools to load MCP servers..."
+
+    for tool in "${SELECTED_TOOLS[@]}"; do
+        case "$tool" in
+            cursor)
+                if pgrep -f "Cursor" &>/dev/null; then
+                    pkill -f "Cursor" 2>/dev/null || true
+                    sleep 2
+                    open -a "Cursor" 2>/dev/null && ok "Cursor restarted" || warn "Could not relaunch Cursor (open it manually)"
+                fi
+                ;;
+            windsurf)
+                if pgrep -f "Windsurf" &>/dev/null; then
+                    pkill -f "Windsurf" 2>/dev/null || true
+                    sleep 2
+                    open -a "Windsurf" 2>/dev/null && ok "Windsurf restarted" || warn "Could not relaunch Windsurf (open it manually)"
+                fi
+                ;;
+        esac
+    done
+
+    # Claude Code is a CLI — can't restart from here, inform user
+    for tool in "${SELECTED_TOOLS[@]}"; do
+        if [ "$tool" = "claude-code" ]; then
+            warn "Claude Code: start a new session to load Contextify MCP tools"
+            break
+        fi
+    done
+}
+
+# ─── Summary ───
 print_summary() {
     echo ""
-    echo "========================================="
-    echo "  Contextify — Setup Complete"
-    echo "========================================="
+    echo "  ╔═══════════════════════════════════════╗"
+    echo "  ║      Contextify — Setup Complete      ║"
+    echo "  ╚═══════════════════════════════════════╝"
     echo ""
     echo "  API:    ${CONTEXTIFY_URL}/api/v1/"
     echo "  MCP:    ${CONTEXTIFY_MCP_URL}"
     echo "  Web UI: ${CONTEXTIFY_URL}"
-    echo "  Health: ${CONTEXTIFY_URL}/health"
     echo ""
-    if [ ${#DETECTED_TOOLS[@]} -gt 0 ]; then
+    if [ ${#SELECTED_TOOLS[@]} -gt 0 ]; then
         echo "  Configured tools:"
-        for tool in "${DETECTED_TOOLS[@]}"; do
-            echo "    - ${tool}"
+        for tool in "${SELECTED_TOOLS[@]}"; do
+            local status
+            case "$tool" in
+                claude-code) status=$(check_claude_code_status) ;;
+                cursor)      status=$(check_cursor_status) ;;
+                windsurf)    status=$(check_windsurf_status) ;;
+                gemini)      status=$(check_gemini_status) ;;
+            esac
+            printf "    %-14s " "${tool}"
+            _status_label "$status"
+            echo ""
         done
     fi
     echo ""
@@ -330,6 +560,7 @@ print_summary() {
     echo "    3. The agent loads project context at session start"
     echo "    4. Memories are shared across all your AI tools"
     echo ""
+    echo "  Re-run this wizard anytime: $0"
     echo "  To uninstall: $0 --uninstall"
     echo ""
 }
@@ -371,7 +602,15 @@ with open('$claude_md', 'w') as f:
     fi
     rm -f "${HOME}/.cursor/rules/contextify.md" 2>/dev/null || true
 
-    # Hooks directory
+    # Windsurf
+    local windsurf_mcp="${HOME}/.codeium/windsurf/mcp_config.json"
+    if [ -f "$windsurf_mcp" ]; then
+        json_remove_key "$windsurf_mcp" "mcpServers.contextify" 2>/dev/null || true
+        ok "Removed Windsurf MCP config"
+    fi
+    rm -f "${HOME}/.codeium/windsurf/memories/contextify.md" 2>/dev/null || true
+
+    # Hooks directory & Gemini
     rm -rf "${HOOKS_DIR}" 2>/dev/null || true
     rm -f "${HOME}/.contextify/gemini-instructions.md" 2>/dev/null || true
     rmdir "${HOME}/.contextify" 2>/dev/null || true
@@ -379,26 +618,146 @@ with open('$claude_md', 'w') as f:
     ok "Uninstall complete. Docker container left running (stop with: docker stop contextify)"
 }
 
+# ─── Help ───
+show_help() {
+    echo ""
+    echo "  Contextify Setup Wizard"
+    echo "  ─────────────────────────"
+    echo ""
+    echo "  Usage:"
+    echo "    ./install.sh                              Interactive setup wizard"
+    echo "    ./install.sh --tools claude-code,cursor    Configure specific tools"
+    echo "    ./install.sh --all                         Configure all tools"
+    echo "    ./install.sh --status                      Show configuration status"
+    echo "    ./install.sh --uninstall                   Remove all configurations"
+    echo "    ./install.sh --help                        Show this help"
+    echo ""
+    echo "  Supported tools: claude-code, cursor, windsurf, gemini"
+    echo ""
+    echo "  Environment variables:"
+    echo "    CONTEXTIFY_URL     Server URL (default: http://localhost:8420)"
+    echo "    CONTEXTIFY_IMAGE   Docker image (default: ghcr.io/atakanatali/contextify:latest)"
+    echo ""
+}
+
+# ─── Status ───
+show_status() {
+    echo ""
+    echo "  Contextify Status"
+    echo "  ─────────────────"
+    echo ""
+
+    local docker_status
+    docker_status=$(check_docker_status)
+    case "$docker_status" in
+        running)    ok "Server: running at ${CONTEXTIFY_URL}" ;;
+        stopped)    warn "Server: container stopped (run: docker start contextify)" ;;
+        not-exists) warn "Server: not installed (run: ./install.sh)" ;;
+    esac
+
+    echo ""
+    echo "  Tool configurations:"
+    local tools=("claude-code" "cursor" "windsurf" "gemini")
+    local names=("Claude Code" "Cursor" "Windsurf" "Gemini")
+    for i in "${!tools[@]}"; do
+        local status
+        case "${tools[$i]}" in
+            claude-code) status=$(check_claude_code_status) ;;
+            cursor)      status=$(check_cursor_status) ;;
+            windsurf)    status=$(check_windsurf_status) ;;
+            gemini)      status=$(check_gemini_status) ;;
+        esac
+        printf "    %-14s " "${names[$i]}"
+        _status_label "$status"
+        echo ""
+    done
+    echo ""
+}
+
+# ─── Welcome Banner ───
+show_welcome_banner() {
+    echo ""
+    echo "  ╔═══════════════════════════════════════╗"
+    echo "  ║      Contextify Setup Wizard          ║"
+    echo "  ╠═══════════════════════════════════════╣"
+    echo "  ║  Shared memory for your AI agents     ║"
+    echo "  ╚═══════════════════════════════════════╝"
+    echo ""
+}
+
 # ─── Main ───
 main() {
-    echo ""
-    echo "  Contextify Installer"
-    echo "  ─────────────────────"
-    echo ""
+    local mode="interactive"
+    SELECTED_TOOLS=()
 
-    if [ "${1:-}" = "--uninstall" ]; then
-        check_prerequisites
-        uninstall
-        exit 0
-    fi
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --uninstall)
+                mode="uninstall" ;;
+            --tools)
+                mode="non-interactive"
+                shift
+                IFS=',' read -ra SELECTED_TOOLS <<< "$1"
+                # Validate tool names
+                for tool in "${SELECTED_TOOLS[@]}"; do
+                    case "$tool" in
+                        claude-code|cursor|windsurf|gemini) ;;
+                        *) fail "Unknown tool: $tool. Valid: claude-code, cursor, windsurf, gemini"; exit 1 ;;
+                    esac
+                done
+                ;;
+            --all)
+                mode="non-interactive"
+                SELECTED_TOOLS=("claude-code" "cursor" "windsurf" "gemini")
+                ;;
+            --status)
+                mode="status" ;;
+            --help|-h)
+                mode="help" ;;
+            *)
+                fail "Unknown option: $1. Run with --help for usage."
+                exit 1 ;;
+        esac
+        shift
+    done
 
-    check_prerequisites
-    start_contextify
-    wait_for_health
-    detect_tools
-    configure_tools
-    run_self_test
-    print_summary
+    case "$mode" in
+        help)
+            show_help
+            exit 0
+            ;;
+        status)
+            check_prerequisites
+            show_status
+            exit 0
+            ;;
+        uninstall)
+            check_prerequisites
+            uninstall
+            exit 0
+            ;;
+        interactive)
+            show_welcome_banner
+            check_prerequisites
+            start_contextify
+            wait_for_health
+            interactive_tool_selection
+            configure_tools
+            run_self_test
+            restart_tools
+            print_summary
+            ;;
+        non-interactive)
+            show_welcome_banner
+            check_prerequisites
+            start_contextify
+            wait_for_health
+            configure_tools
+            run_self_test
+            restart_tools
+            print_summary
+            ;;
+    esac
 }
 
 main "$@"

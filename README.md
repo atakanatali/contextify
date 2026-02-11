@@ -19,7 +19,7 @@
   </a>
 </p>
 
-Unified memory system for AI agents. Provides shared short-term and long-term memory across Claude Code, Cursor, Gemini, Antigravity, and any other AI tool.
+Unified memory system for AI agents. Provides shared short-term and long-term memory across Claude Code, Cursor, Windsurf, Gemini, and any other AI tool.
 
 ## Core Architecture
 
@@ -28,8 +28,8 @@ graph TB
     subgraph Agents["AI Agents"]
         CC[Claude Code]
         CU[Cursor]
+        WS[Windsurf]
         GE[Gemini]
-        AG[Antigravity]
     end
 
     subgraph Contextify["Contextify :8420"]
@@ -44,8 +44,8 @@ graph TB
         OL[Ollama Embeddings]
     end
 
-    CC & CU -->|MCP| MCP
-    GE & AG -->|REST| REST
+    CC & CU & WS -->|MCP| MCP
+    GE -->|REST| REST
     WEB -.-> REST
     MCP & REST --> SVC
     SVC --> PG & OL
@@ -61,38 +61,7 @@ graph TB
 
 ## Quick Start
 
-Everything included in a single Docker image — PostgreSQL, Ollama, embeddings model, server, and Web UI:
-
-```bash
-docker run -d --name contextify -p 8420:8420 \
-  -v contextify-data:/var/lib/postgresql/data \
-  ghcr.io/atakanatali/contextify:latest
-```
-
-Or with Docker Compose:
-
-```bash
-curl -fsSL https://github.com/atakanatali/contextify/releases/latest/download/docker-compose.prod.yml -o docker-compose.yml
-docker compose up
-```
-
-For development (separate services, build from source):
-
-```bash
-git clone https://github.com/atakanatali/contextify.git
-cd contextify
-docker compose up
-```
-
-Services:
-- **Web UI**: http://localhost:8420
-- **API**: http://localhost:8420/api/v1/
-- **MCP**: http://localhost:8420/mcp
-- **Health**: http://localhost:8420/health
-
-## Automatic Setup
-
-The installer starts Contextify, detects your AI tools, and configures everything:
+One command to set up everything — the interactive wizard starts Contextify, asks which AI tools you use, and configures them:
 
 ```bash
 git clone https://github.com/atakanatali/contextify.git
@@ -100,15 +69,52 @@ cd contextify
 ./install.sh
 ```
 
-What it does:
-- Starts `contextify:latest` Docker container (if not running)
-- Detects Claude Code, Cursor (auto)
-- Adds MCP server config to each tool
-- Installs Claude Code hooks (auto-context at session start)
-- Installs system prompt rules for each tool
-- Runs a self-test to verify everything works
+The wizard will:
+1. Start the Contextify Docker container (PostgreSQL + Ollama + server + Web UI)
+2. Ask which tools to configure: **Claude Code**, **Cursor**, **Windsurf**, **Gemini**
+3. Set up MCP/REST integration, hooks, and prompt rules for each selected tool
+4. Run a self-test to verify everything works
 
-To uninstall: `./install.sh --uninstall`
+```
+  Which AI tools would you like to configure?
+
+    [1] Claude Code   ✓ configured
+    [2] Cursor        ○ not configured
+    [3] Windsurf      ○ not configured
+    [4] Gemini        ○ not configured
+
+    [a] All of the above
+    [q] Quit
+
+  Select tools (e.g. 1,3 or a):
+```
+
+Re-run anytime — the wizard skips already-completed steps.
+
+### Other install modes
+
+```bash
+./install.sh --tools claude-code,cursor    # Non-interactive, specific tools
+./install.sh --all                         # Non-interactive, all tools
+./install.sh --status                      # Show what's configured
+./install.sh --uninstall                   # Remove all configurations
+```
+
+### Manual Docker setup
+
+If you prefer to start the container yourself:
+
+```bash
+docker run -d --name contextify -p 8420:8420 \
+  -v contextify-data:/var/lib/postgresql/data \
+  ghcr.io/atakanatali/contextify:latest
+```
+
+Services:
+- **Web UI**: http://localhost:8420
+- **API**: http://localhost:8420/api/v1/
+- **MCP**: http://localhost:8420/mcp
+- **Health**: http://localhost:8420/health
 
 ## Manual Agent Setup
 
@@ -139,6 +145,20 @@ Add to `~/.cursor/mcp.json`:
     "contextify": {
       "url": "http://localhost:8420/mcp",
       "transport": "streamable-http"
+    }
+  }
+}
+```
+
+### Windsurf
+
+Add to `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "contextify": {
+      "serverUrl": "http://localhost:8420/mcp"
     }
   }
 }
