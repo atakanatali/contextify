@@ -433,5 +433,100 @@ func (r *Repository) ListByProject(ctx context.Context, projectID string, limit 
 	return memories, rows.Err()
 }
 
+// GetAnalytics returns analytics data for the dashboard.
+func (r *Repository) GetAnalytics(ctx context.Context) (*AnalyticsData, error) {
+	data := &AnalyticsData{
+		TokensByAgent: make(map[string]int64),
+	}
+
+	// Token metrics + hit rate
+	err := r.pool.QueryRow(ctx, `
+		SELECT
+			COALESCE(SUM(LENGTH(content) / 4), 0),
+			COALESCE(SUM(LENGTH(content) * access_count / 4), 0),
+			COALESCE(SUM(access_count), 0),
+			CASE WHEN COUNT(*) > 0
+				THEN COUNT(*) FILTER (WHERE access_count > 0)::float / COUNT(*)
+				ELSE 0
+			END
+		FROM memories
+	`).Scan(&data.TotalTokensStored, &data.TotalTokensSaved, &data.TotalHits, &data.HitRate)
+	if err != nil {
+		return nil, fmt.Errorf("analytics token metrics: %w", err)
+	}
+
+	// Top accessed memories
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, title, type, access_count, LENGTH(content)/4, agent_source
+		FROM memories
+		WHERE access_count > 0
+		ORDER BY access_count DESC
+		LIMIT 10
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("analytics top accessed: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var m MemorySummary
+		if err := rows.Scan(&m.ID, &m.Title, &m.Type, &m.AccessCount, &m.TokenCount, &m.AgentSource); err != nil {
+			return nil, fmt.Errorf("scan top accessed: %w", err)
+		}
+		data.TopAccessedMemories = append(data.TopAccessedMemories, m)
+	}
+	rows.Close()
+
+	if data.TopAccessedMemories == nil {
+		data.TopAccessedMemories = []MemorySummary{}
+	}
+
+	// Tokens saved by agent
+	rows, err = r.pool.Query(ctx, `
+		SELECT COALESCE(agent_source, 'unknown'), COALESCE(SUM(LENGTH(content) * access_count / 4), 0)
+		FROM memories
+		GROUP BY agent_source
+		HAVING SUM(LENGTH(content) * access_count / 4) > 0
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("analytics tokens by agent: %w", err)
+	}
+	for rows.Next() {
+		var agent string
+		var tokens int64
+		rows.Scan(&agent, &tokens)
+		data.TokensByAgent[agent] = tokens
+	}
+	rows.Close()
+
+	// Timeline (last 30 days)
+	rows, err = r.pool.Query(ctx, `
+		SELECT d::date,
+			COALESCE(COUNT(m.id), 0),
+			COALESCE(SUM(m.access_count), 0)
+		FROM generate_series(NOW() - INTERVAL '29 days', NOW(), '1 day') d
+		LEFT JOIN memories m ON m.created_at::date = d::date
+		GROUP BY d::date
+		ORDER BY d::date
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("analytics timeline: %w", err)
+	}
+	for rows.Next() {
+		var e TimelineEntry
+		var d time.Time
+		rows.Scan(&d, &e.Created, &e.Hits)
+		e.Date = d.Format("2006-01-02")
+		data.Timeline = append(data.Timeline, e)
+	}
+	rows.Close()
+
+	if data.Timeline == nil {
+		data.Timeline = []TimelineEntry{}
+	}
+
+	return data, nil
+}
+
 // Ensure unused import doesn't cause error
 var _ = time.Now

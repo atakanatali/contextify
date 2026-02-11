@@ -17,7 +17,7 @@ type StoreMemoryInput struct {
 	Title       string   `json:"title" jsonschema:"Title of the memory,required"`
 	Content     string   `json:"content" jsonschema:"Detailed content of the memory,required"`
 	Summary     *string  `json:"summary,omitempty" jsonschema:"Brief summary"`
-	Type        string   `json:"type" jsonschema:"Type: solution|problem|code_pattern|fix|error|workflow|decision|general"`
+	Type        string   `json:"type" jsonschema:"Type: solution|problem|code_pattern|fix|error|workflow|decision|general|task|technology|command|file_context|conversation|project. Unknown types default to general."`
 	Scope       string   `json:"scope" jsonschema:"Scope: global|project"`
 	ProjectID   *string  `json:"project_id,omitempty" jsonschema:"Project identifier"`
 	AgentSource *string  `json:"agent_source,omitempty" jsonschema:"Source agent: claude-code|cursor|gemini|antigravity"`
