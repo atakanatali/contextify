@@ -42,11 +42,12 @@ check_docker_status() {
 }
 
 check_claude_code_status() {
+    local mcp_config="${HOME}/.claude.json"
     local settings="${HOME}/.claude/settings.json"
     local claude_md="${HOME}/.claude/CLAUDE.md"
     local has_mcp=false has_hooks=false has_md=false
 
-    json_has_key "$settings" "mcpServers.contextify" 2>/dev/null && has_mcp=true
+    json_has_key "$mcp_config" "mcpServers.contextify" 2>/dev/null && has_mcp=true
     if [ -f "$settings" ] && grep -q "session-start.sh" "$settings" 2>/dev/null; then
         has_hooks=true
     fi
@@ -278,15 +279,22 @@ interactive_tool_selection() {
 configure_claude_code() {
     info "Configuring Claude Code..."
 
+    local mcp_config="${HOME}/.claude.json"
     local settings="${HOME}/.claude/settings.json"
     mkdir -p "${HOME}/.claude"
 
-    # 1. MCP server
+    # Migration: clean up old incorrect location (settings.json → .claude.json)
     if json_has_key "$settings" "mcpServers.contextify" 2>/dev/null; then
+        json_remove_key "$settings" "mcpServers.contextify" 2>/dev/null || true
+        info "Migrated MCP config from settings.json to ~/.claude.json"
+    fi
+
+    # 1. MCP server → ~/.claude.json (Claude Code reads MCP servers from here)
+    if json_has_key "$mcp_config" "mcpServers.contextify" 2>/dev/null; then
         ok "MCP server already configured (skipping)"
     else
-        json_set_nested "$settings" "mcpServers.contextify" '{"type":"streamableHttp","url":"'"${CONTEXTIFY_MCP_URL}"'"}'
-        ok "Added MCP server to ${settings}"
+        json_set_nested "$mcp_config" "mcpServers.contextify" '{"type":"http","url":"'"${CONTEXTIFY_MCP_URL}"'"}'
+        ok "Added MCP server to ${mcp_config}"
     fi
 
     # 2. Install hooks
@@ -598,13 +606,20 @@ print_summary() {
 uninstall() {
     info "Uninstalling Contextify configurations..."
 
-    # Claude Code
+    # Claude Code — MCP server from ~/.claude.json
+    local mcp_config="${HOME}/.claude.json"
+    if [ -f "$mcp_config" ]; then
+        json_remove_key "$mcp_config" "mcpServers.contextify" 2>/dev/null || true
+        ok "Removed Claude Code MCP config"
+    fi
+
+    # Claude Code — also clean up old incorrect location
     local claude_settings="${HOME}/.claude/settings.json"
     if [ -f "$claude_settings" ]; then
         json_remove_key "$claude_settings" "mcpServers.contextify" 2>/dev/null || true
         json_remove_hook "$claude_settings" "SessionStart" "${HOOKS_DIR}/session-start.sh" 2>/dev/null || true
         json_remove_hook "$claude_settings" "PostToolUse" "${HOOKS_DIR}/post-tool-use.sh" 2>/dev/null || true
-        ok "Removed Claude Code MCP + hooks config"
+        ok "Removed Claude Code hooks config"
     fi
 
     # CLAUDE.md — remove marker block
