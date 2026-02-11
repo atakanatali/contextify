@@ -7,6 +7,14 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Post-tool-use hook state machine — enforces `store_memory` after every `git commit` with violation nagging
+- `contextify update` and `install.sh --update` now force-overwrite tool configs (hooks, prompts, rules) with latest versions
+- `UpdateConfiguredTools()` function for centralized tool config updates
+
+### Changed
+- Post-tool-use hook output upgraded from soft reminder to aggressive required/violation messages
+
 ## [0.5.3] - 2026-02-12
 
 ### Added
