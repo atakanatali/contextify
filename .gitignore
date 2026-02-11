@@ -1,0 +1,32 @@
+# Go
+/contextify
+*.exe
+*.test
+*.out
+
+# Dependencies
+/vendor/
+
+# Web UI
+web/node_modules/
+web/dist/
+web/.vite/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes
+pgdata/
+ollama_models/
+
+# Environment
+.env
+.env.local
