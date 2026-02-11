@@ -21,6 +21,8 @@
 
 Unified memory system for AI agents. Provides shared short-term and long-term memory across Claude Code, Cursor, Windsurf, Gemini, and any other AI tool.
 
+<img width="3004" height="1437" alt="image" src="https://github.com/user-attachments/assets/939ef56d-9fcc-4c8b-a85b-29f9de4256e5" />
+
 ## Core Architecture
 
 ```mermaid
