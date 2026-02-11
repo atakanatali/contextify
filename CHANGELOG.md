@@ -29,6 +29,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - CLI build verification step in backend CI
 - Expanded PostToolUse hooks: recall triggers on Grep, Glob, WebSearch, WebFetch, Task, Read; store triggers on git commit, push, PR, errors
 - Aggressive mandatory protocol prompts for Cursor, Windsurf, and Gemini rules files
+- Claude Code CLAUDE.md prompt block upgraded to mandatory protocol (matching hook enforcement level)
 
 ### Changed
 - `install.sh` no longer auto-detects and silently configures all tools
