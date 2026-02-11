@@ -123,12 +123,15 @@ TOOL_INFO=$(cat 2>/dev/null || echo '{}')
 # Extract tool name and input
 TOOL_NAME=""
 TOOL_INPUT=""
+TOOL_QUERY=""
 if command -v jq &>/dev/null; then
     TOOL_NAME=$(echo "$TOOL_INFO" | jq -r '.tool_name // empty' 2>/dev/null)
     TOOL_INPUT=$(echo "$TOOL_INFO" | jq -r '.tool_input.command // empty' 2>/dev/null)
+    TOOL_QUERY=$(echo "$TOOL_INFO" | jq -r '.tool_input.query // .tool_input.pattern // .tool_input.prompt // empty' 2>/dev/null)
 elif command -v python3 &>/dev/null; then
     TOOL_NAME=$(echo "$TOOL_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_name',''))" 2>/dev/null)
     TOOL_INPUT=$(echo "$TOOL_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null)
+    TOOL_QUERY=$(echo "$TOOL_INFO" | python3 -c "import json,sys; ti=json.load(sys.stdin).get('tool_input',{}); print(ti.get('query','') or ti.get('pattern','') or ti.get('prompt',''))" 2>/dev/null)
 fi
 
 # --- Git commit detected ---

@@ -27,6 +27,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Automatic CHANGELOG.md updates on release (`scripts/update-changelog.sh`)
 - Auto-generated release notes from CHANGELOG + git log (`scripts/release-notes.sh`)
 - CLI build verification step in backend CI
+- Expanded PostToolUse hooks: recall triggers on Grep, Glob, WebSearch, WebFetch, Task, Read; store triggers on git commit, push, PR, errors
+- Aggressive mandatory protocol prompts for Cursor, Windsurf, and Gemini rules files
 
 ### Changed
 - `install.sh` no longer auto-detects and silently configures all tools
