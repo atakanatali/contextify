@@ -53,7 +53,7 @@ type SearchConfig struct {
 func Load(path string) (*Config, error) {
 	cfg := &Config{
 		Server:    ServerConfig{Port: 8420, Host: "0.0.0.0"},
-		Database:  DatabaseConfig{MaxOpenConns: 25, MaxIdleConns: 5, ConnMaxLifetime: 5 * time.Minute},
+		Database:  DatabaseConfig{URL: "postgres://contextify:contextify_local@localhost:5432/contextify?sslmode=disable", MaxOpenConns: 25, MaxIdleConns: 5, ConnMaxLifetime: 5 * time.Minute},
 		Embedding: EmbeddingConfig{Provider: "ollama", OllamaURL: "http://localhost:11434", Model: "nomic-embed-text", Dimensions: 768},
 		Memory:    MemoryConfig{DefaultTTL: 86400, PromoteAccessCount: 5, PromoteImportance: 0.8, TTLExtendFactor: 0.5, CleanupInterval: 5 * time.Minute},
 		Search:    SearchConfig{VectorWeight: 0.7, KeywordWeight: 0.3, DefaultLimit: 20, MaxLimit: 100},
