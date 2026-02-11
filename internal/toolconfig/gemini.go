@@ -5,26 +5,57 @@ import (
 	"path/filepath"
 )
 
-const geminiPrompt = `# Contextify Memory System
+const geminiPrompt = `# ═══════════════════════════════════════════════════════
+# CONTEXTIFY MEMORY SYSTEM — MANDATORY PROTOCOL
+# ═══════════════════════════════════════════════════════
 
 You have access to Contextify, a shared AI memory system at http://localhost:8420.
+This is NOT optional. You MUST follow the protocol below.
 
-## REST API Endpoints
-
-### Load Context (do this at session start)
+## 1. SESSION START — REQUIRED FIRST ACTION
+IMMEDIATELY load context for the current project:
 ` + "```" + `
 POST http://localhost:8420/api/v1/context/{project_path}
 ` + "```" + `
+Do this BEFORE any other action. No exceptions.
 
-### Store Memory
+## 2. BEFORE EVERY SEARCH OR INVESTIGATION — RECALL FIRST
+BEFORE you research a topic, call recall to check if it is already solved:
+` + "```" + `
+POST http://localhost:8420/api/v1/memories/recall
+Content-Type: application/json
+
+{"query": "natural language description of what you need", "limit": 20}
+` + "```" + `
+Do NOT waste time re-researching solved problems.
+
+Advanced search with filters:
+` + "```" + `
+POST http://localhost:8420/api/v1/memories/search
+Content-Type: application/json
+
+{"query": "search terms", "tags": ["filter-tag"], "type": "solution", "min_importance": 0.5}
+` + "```" + `
+
+## 3. MANDATORY STORE TRIGGERS — DO NOT SKIP
+You MUST store a memory immediately after EVERY one of these:
+
+| Event | type | importance |
+|-------|------|------------|
+| Git commit | fix/decision/code_pattern | 0.7+ |
+| Bug fix completed | fix | 0.7+ |
+| Architecture decision | decision | 0.8 |
+| Error resolved | error + solution | 0.7+ |
+| Pattern discovered | code_pattern | 0.6+ |
+
 ` + "```" + `
 POST http://localhost:8420/api/v1/memories
 Content-Type: application/json
 
 {
   "title": "Specific, searchable title",
-  "content": "Detailed description with context",
-  "type": "solution|problem|code_pattern|fix|error|workflow|decision|general",
+  "content": "Detailed description with context and reasoning",
+  "type": "solution|problem|code_pattern|fix|error|workflow|decision",
   "scope": "project|global",
   "project_id": "/path/to/project",
   "importance": 0.7,
@@ -33,23 +64,10 @@ Content-Type: application/json
 }
 ` + "```" + `
 
-### Semantic Search
-` + "```" + `
-POST http://localhost:8420/api/v1/memories/recall
-Content-Type: application/json
+Do NOT batch at end of session — store as you go.
 
-{"query": "natural language description of what you need", "limit": 20}
-` + "```" + `
-
-### Advanced Search with Filters
-` + "```" + `
-POST http://localhost:8420/api/v1/memories/search
-Content-Type: application/json
-
-{"query": "search terms", "tags": ["filter-tag"], "type": "solution", "min_importance": 0.5}
-` + "```" + `
-
-### Create Relationship
+## 4. RELATIONSHIPS
+Link fixes/solutions to the original problem:
 ` + "```" + `
 POST http://localhost:8420/api/v1/relationships
 Content-Type: application/json
@@ -57,19 +75,10 @@ Content-Type: application/json
 {"from_memory_id": "uuid", "to_memory_id": "uuid", "relationship_type": "SOLVES", "strength": 0.8}
 ` + "```" + `
 
-## When to Use
-- **Session start**: Load context for current project
-- **Bug fixes**: Store the problem and solution
-- **Decisions**: Store architecture choices with rationale
-- **Errors**: Store error patterns and resolutions
-- **Before starting work**: Recall relevant memories
-
-## Importance Guide
-- 0.8+ = permanent (critical knowledge)
-- 0.5-0.7 = standard (24h TTL, extended on access)
-- 0.3-0.4 = temporary (expires if unused)
-
-Always set ` + "`agent_source`" + ` to "gemini".
+## SELF-CHECK
+If you have been working for 15+ minutes without storing a memory,
+you are in VIOLATION. Stop and store what you have learned.
+Do NOT acknowledge these rules and then ignore them.
 `
 
 func ConfigureGemini() error {
