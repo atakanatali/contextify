@@ -19,10 +19,12 @@ import (
 	"github.com/atakanatali/contextify/internal/scheduler"
 )
 
+var version = "dev" // set via ldflags at build time
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	slog.Info("starting contextify", "version", "0.1.0")
+	slog.Info("starting contextify", "version", version)
 
 	// Load config
 	cfg, err := config.Load("config.yaml")

@@ -1,0 +1,108 @@
+name: Publish to GHCR
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 1.0.0)'
+        required: true
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/atakanatali/contextify
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish:
+    name: Build & Publish
+    if: github.repository_owner == 'atakanatali'
+    runs-on: ubuntu-latest
+    environment: docker-prod
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set Version
+        id: version
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Release version: ${VERSION}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.VERSION }}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ steps.version.outputs.VERSION }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create Git Tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${{ steps.version.outputs.VERSION }}" -m "Release v${{ steps.version.outputs.VERSION }}"
+          git push origin "v${{ steps.version.outputs.VERSION }}"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.VERSION }}
+          name: Contextify v${{ steps.version.outputs.VERSION }}
+          body: |
+            ## Contextify v${{ steps.version.outputs.VERSION }}
+
+            ### Docker Image
+            ```bash
+            docker pull ghcr.io/atakanatali/contextify:${{ steps.version.outputs.VERSION }}
+            ```
+
+            ### Quick Start
+            ```bash
+            curl -fsSL https://github.com/atakanatali/contextify/releases/latest/download/docker-compose.prod.yml -o docker-compose.yml
+            docker compose up
+            ```
+
+            ### What's Included
+            - Contextify Server (Go) — MCP + REST API + Web UI
+            - PostgreSQL 16 + pgvector (HNSW index, 768d embeddings)
+            - Ollama + nomic-embed-text (local embeddings)
+            - Hybrid search (0.7 vector + 0.3 keyword)
+            - TTL-based memory lifecycle with auto-promotion
+
+            See [ARCHITECTURE.md](https://github.com/atakanatali/contextify/blob/main/ARCHITECTURE.md) for technical details.
+          draft: false
+          prerelease: false
+          files: docker-compose.prod.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

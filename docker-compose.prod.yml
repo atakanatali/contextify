@@ -25,9 +25,7 @@ services:
     restart: unless-stopped
 
   server:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/atakanatali/contextify:latest
     ports:
       - "8420:8420"
     depends_on:

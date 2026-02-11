@@ -1,6 +1,11 @@
 package api
 
 import (
+	"io/fs"
+	"net/http"
+	"os"
+	"strings"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/cors"
 
@@ -13,11 +18,11 @@ func NewRouter(svc *memory.Service) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:3000", "http://127.0.0.1:3000"},
+		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Content-Type", "X-Request-ID"},
 		ExposedHeaders:   []string{"X-Request-ID"},
-		AllowCredentials: true,
+		AllowCredentials: false,
 		MaxAge:           300,
 	}))
 	r.Use(requestIDMiddleware)
@@ -52,5 +57,35 @@ func NewRouter(svc *memory.Service) *chi.Mux {
 		r.Post("/context/{project}", h.GetContext)
 	})
 
+	// Serve embedded Web UI static files (SPA with fallback to index.html)
+	webDir := "/usr/share/contextify/web"
+	if _, err := os.Stat(webDir); err == nil {
+		spaHandler := spaFileServer(os.DirFS(webDir))
+		r.NotFound(spaHandler.ServeHTTP)
+	}
+
 	return r
+}
+
+// spaFileServer serves static files and falls back to index.html for SPA routing.
+func spaFileServer(fsys fs.FS) http.Handler {
+	fileServer := http.FileServer(http.FS(fsys))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			path = "index.html"
+		}
+
+		// Try to open the file
+		f, err := fsys.Open(path)
+		if err != nil {
+			// File not found — serve index.html for SPA routing
+			r.URL.Path = "/"
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		f.Close()
+
+		fileServer.ServeHTTP(w, r)
+	})
 }

@@ -1,39 +1,85 @@
 # Contextify
 
 <p align="center">
-  <img width="456" height="456" alt="Cachify Logo" src="https://github.com/user-attachments/assets/bb64c170-d4e0-4f09-9f60-467bd9f043f8" />
+  <img width="456" height="456" alt="Contextify Logo" src="https://github.com/user-attachments/assets/bb64c170-d4e0-4f09-9f60-467bd9f043f8" />
 </p>
 
+<p align="center">
+  <a href="https://github.com/atakanatali/contextify/actions/workflows/release.yml">
+    <img src="https://github.com/atakanatali/contextify/actions/workflows/release.yml/badge.svg" alt="Publish" />
+  </a>
+  <a href="https://github.com/atakanatali/contextify/releases">
+    <img src="https://img.shields.io/github/v/release/atakanatali/contextify?include_prereleases" alt="Release" />
+  </a>
+  <a href="https://github.com/atakanatali/contextify/pkgs/container/contextify">
+    <img src="https://img.shields.io/badge/ghcr.io-contextify-blue?logo=docker" alt="Docker Image" />
+  </a>
+  <a href="https://github.com/atakanatali/contextify/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/atakanatali/contextify" alt="License" />
+  </a>
+</p>
 
 Unified memory system for AI agents. Provides shared short-term and long-term memory across Claude Code, Cursor, Gemini, Antigravity, and any other AI tool.
 
-## Architecture
+## Core Architecture
 
+```mermaid
+graph TB
+    subgraph Agents["AI Agents"]
+        CC[Claude Code]
+        CU[Cursor]
+        GE[Gemini]
+        AG[Antigravity]
+    end
+
+    subgraph Contextify["Contextify :8420"]
+        MCP[MCP Server]
+        REST[REST API]
+        WEB[Web UI]
+        SVC[Memory Service]
+    end
+
+    subgraph Storage["Data Layer"]
+        PG[(PostgreSQL + pgvector)]
+        OL[Ollama Embeddings]
+    end
+
+    CC & CU -->|MCP| MCP
+    GE & AG -->|REST| REST
+    WEB -.-> REST
+    MCP & REST --> SVC
+    SVC --> PG & OL
+
+    style MCP fill:#4f46e5,color:#fff
+    style REST fill:#059669,color:#fff
+    style WEB fill:#d97706,color:#fff
+    style PG fill:#2563eb,color:#fff
+    style OL fill:#7c3aed,color:#fff
 ```
-┌──────────────────────────────────────────────┐
-│                Docker Compose                │
-│                                              │
-│  PostgreSQL+pgvector  Ollama       Web UI    │
-│     :5432              :11434      :3000     │
-│         └───────┬───────┘            │       │
-│           Contextify Server ◄────────┘       │
-│           (Go) :8420                         │
-│           MCP + REST API                     │
-└──────────────┬───────────────────────────────┘
-               │
-     AI Agents (MCP or REST)
-```
+
+> For detailed technical documentation, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Quick Start
 
+Download [`docker-compose.prod.yml`](https://github.com/atakanatali/contextify/releases/latest/download/docker-compose.prod.yml) and run:
+
 ```bash
+curl -fsSL https://github.com/atakanatali/contextify/releases/latest/download/docker-compose.prod.yml -o docker-compose.yml
+docker compose up
+```
+
+Or for development (build from source):
+
+```bash
+git clone https://github.com/atakanatali/contextify.git
+cd contextify
 docker compose up
 ```
 
 Services:
-- **API**: http://localhost:8420
+- **Web UI**: http://localhost:8420
+- **API**: http://localhost:8420/api/v1/
 - **MCP**: http://localhost:8420/mcp
-- **Web UI**: http://localhost:3000
 - **Health**: http://localhost:8420/health
 
 ## Agent Setup
