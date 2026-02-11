@@ -115,7 +115,7 @@ exit 0
 
 const postToolUseHook = `#!/usr/bin/env bash
 # Contextify PostToolUse hook for Claude Code
-# Forces the agent to recall and store memories at the right moments.
+# Forces the agent to store memories after significant actions.
 
 # Read tool use info from stdin
 TOOL_INFO=$(cat 2>/dev/null || echo '{}')
@@ -133,10 +133,6 @@ elif command -v python3 &>/dev/null; then
     TOOL_INPUT=$(echo "$TOOL_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null)
     TOOL_QUERY=$(echo "$TOOL_INFO" | python3 -c "import json,sys; ti=json.load(sys.stdin).get('tool_input',{}); print(ti.get('query','') or ti.get('pattern','') or ti.get('prompt',''))" 2>/dev/null)
 fi
-
-# ═══════════════════════════════════════════════════════
-# STORE triggers — you just did something worth remembering
-# ═══════════════════════════════════════════════════════
 
 # --- Git commit detected ---
 if [ "$TOOL_NAME" = "Bash" ] && echo "$TOOL_INPUT" | grep -qE 'git commit'; then
@@ -156,48 +152,14 @@ if [ "$TOOL_NAME" = "Bash" ] && echo "$TOOL_INPUT" | grep -qE 'git push'; then
     echo "[Contextify] Push detected. Ensure all commits from this session have been stored as memories."
 fi
 
-# --- PR creation detected ---
-if [ "$TOOL_NAME" = "Bash" ] && echo "$TOOL_INPUT" | grep -qE 'gh pr create'; then
-    echo "[Contextify] PR created. Store a summary memory of the entire PR scope with store_memory."
-fi
-
-# --- Error resolved ---
+# --- Error patterns in bash output ---
 if [ "$TOOL_NAME" = "Bash" ] && echo "$TOOL_INPUT" | grep -qiE 'error|failed|fatal'; then
     echo "[Contextify] Possible error encountered. If you resolved it, store the fix with store_memory (type: fix)."
 fi
 
-# ═══════════════════════════════════════════════════════
-# RECALL triggers — you're researching, check memory first
-# ═══════════════════════════════════════════════════════
-
-# --- Grep/search in codebase = exploring something ---
-if [ "$TOOL_NAME" = "Grep" ] || [ "$TOOL_NAME" = "Glob" ]; then
-    echo "[Contextify] 🔍 You are searching the codebase. Did you recall_memories first?"
-    echo "[Contextify] If this is a new task or investigation, call recall_memories with the topic BEFORE continuing."
-fi
-
-# --- WebSearch = researching a topic ---
-if [ "$TOOL_NAME" = "WebSearch" ]; then
-    echo "[Contextify] 🌐 Web search detected. Call recall_memories first — this may already be solved in memory."
-    echo "[Contextify] After finding the answer, store_memory the solution for future sessions."
-fi
-
-# --- WebFetch = reading external docs ---
-if [ "$TOOL_NAME" = "WebFetch" ]; then
-    echo "[Contextify] 📄 External content fetched. If you learned something reusable, store_memory it."
-fi
-
-# --- Task/Agent = delegating complex work ---
-if [ "$TOOL_NAME" = "Task" ]; then
-    echo "[Contextify] 🔀 Agent task launched. When it completes, store_memory the findings if significant."
-fi
-
-# --- Read = exploring config/infra files ---
-if [ "$TOOL_NAME" = "Read" ]; then
-    FILE_PATH=$(echo "$TOOL_INFO" | jq -r '.tool_input.file_path // empty' 2>/dev/null || echo "")
-    if echo "$FILE_PATH" | grep -qiE 'config|dockerfile|workflow|\.yml|\.yaml|go\.mod|package\.json|requirements\.txt'; then
-        echo "[Contextify] 📂 Reading config/infra file. If you discover a pattern or decision, store_memory it."
-    fi
+# --- PR creation detected ---
+if [ "$TOOL_NAME" = "Bash" ] && echo "$TOOL_INPUT" | grep -qE 'gh pr create'; then
+    echo "[Contextify] PR created. Store a summary memory of the entire PR scope with store_memory."
 fi
 
 # Always exit 0
