@@ -1,0 +1,28 @@
+server:
+  port: 8420
+  host: "0.0.0.0"
+
+database:
+  url: "postgres://contextify:contextify_local@localhost:5432/contextify?sslmode=disable"
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 5m
+
+embedding:
+  provider: ollama
+  ollama_url: "http://localhost:11434"
+  model: "nomic-embed-text"
+  dimensions: 768
+
+memory:
+  default_ttl: 86400        # 24 hours in seconds
+  promote_access_count: 5   # auto-promote after N accesses
+  promote_importance: 0.8   # auto-promote above this importance
+  ttl_extend_factor: 0.5    # extend TTL by this factor on access
+  cleanup_interval: 5m      # expired memory cleanup interval
+
+search:
+  vector_weight: 0.7        # weight for vector similarity in hybrid search
+  keyword_weight: 0.3       # weight for keyword match in hybrid search
+  default_limit: 20
+  max_limit: 100
