@@ -7,6 +7,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-02-12
+
 ### Added
 - Interactive setup wizard — `install.sh` now asks which AI tools to configure
 - Windsurf support (MCP via `~/.codeium/windsurf/mcp_config.json`)
@@ -70,6 +72,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Docker image publishing and CI/CD pipeline
 - Architecture documentation
 
-[Unreleased]: https://github.com/atakanatali/contextify/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/atakanatali/contextify/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/atakanatali/contextify/compare/v0.2.0...v0.5.3
 [0.2.0]: https://github.com/atakanatali/contextify/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/atakanatali/contextify/releases/tag/v0.1.0
