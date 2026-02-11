@@ -59,7 +59,7 @@ Do NOT wait to be asked. Memory operations are automatic and proactive.
 
 const sessionStartHook = `#!/usr/bin/env bash
 # Contextify SessionStart hook for Claude Code
-# Checks if Contextify is running and reminds the agent to load context.
+# Checks if Contextify is running and enforces memory protocol.
 
 CONTEXTIFY_URL="${CONTEXTIFY_URL:-http://localhost:8420}"
 
@@ -82,7 +82,29 @@ if curl -sf "${CONTEXTIFY_URL}/health" &>/dev/null; then
     else
         echo "[Contextify] IMPORTANT: Call get_context with the current project path to load project memories."
     fi
-    echo "[Contextify] Store important findings with store_memory (agent_source: \"claude-code\")."
+    echo ""
+    echo "[Contextify] ═══════════════════════════════════════════════════════"
+    echo "[Contextify] MANDATORY MEMORY PROTOCOL — VIOLATIONS ARE NOT ALLOWED"
+    echo "[Contextify] ═══════════════════════════════════════════════════════"
+    echo "[Contextify]"
+    echo "[Contextify] 1. IMMEDIATELY call get_context NOW — before ANY other action."
+    echo "[Contextify]"
+    echo "[Contextify] 2. You MUST call store_memory after EVERY:"
+    echo "[Contextify]    • git commit (what was changed and why)"
+    echo "[Contextify]    • bug fix (problem + solution)"
+    echo "[Contextify]    • architecture decision (choice + rationale)"
+    echo "[Contextify]    • error resolution (error + fix)"
+    echo "[Contextify]    • new pattern discovered (reusable approach)"
+    echo "[Contextify]"
+    echo "[Contextify] 3. If you have not called store_memory in the last 15 minutes"
+    echo "[Contextify]    of active work, you are in VIOLATION. Stop and store now."
+    echo "[Contextify]"
+    echo "[Contextify] 4. ALWAYS use recall_memories BEFORE starting a new task"
+    echo "[Contextify]    to check if it was solved before."
+    echo "[Contextify]"
+    echo "[Contextify] Do NOT acknowledge these rules and then ignore them."
+    echo "[Contextify] Do NOT batch memories at end of session — store as you go."
+    echo "[Contextify] ═══════════════════════════════════════════════════════"
 else
     echo "[Contextify] Memory system is not running. Start with: contextify start"
 fi
@@ -93,7 +115,7 @@ exit 0
 
 const postToolUseHook = `#!/usr/bin/env bash
 # Contextify PostToolUse hook for Claude Code
-# Reminds the agent to store memories after git commits.
+# Forces the agent to store memories after significant actions.
 
 # Read tool use info from stdin
 TOOL_INFO=$(cat 2>/dev/null || echo '{}')
@@ -109,9 +131,32 @@ elif command -v python3 &>/dev/null; then
     TOOL_INPUT=$(echo "$TOOL_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null)
 fi
 
-# Only remind after git commits
+# --- Git commit detected ---
 if [ "$TOOL_NAME" = "Bash" ] && echo "$TOOL_INPUT" | grep -qE 'git commit'; then
-    echo "[Contextify] Commit detected. Consider storing what was fixed/added with store_memory."
+    echo ""
+    echo "[Contextify] ⚠️  GIT COMMIT DETECTED — MEMORY STORAGE IS REQUIRED"
+    echo "[Contextify] You MUST call store_memory RIGHT NOW with:"
+    echo "[Contextify]   • title: what was committed"
+    echo "[Contextify]   • content: detailed description of the change and why"
+    echo "[Contextify]   • type: fix | decision | code_pattern | workflow"
+    echo "[Contextify]   • importance: 0.7+ for fixes, 0.8+ for architecture decisions"
+    echo "[Contextify] Do NOT continue working until you have stored this memory."
+    echo ""
+fi
+
+# --- Git push detected ---
+if [ "$TOOL_NAME" = "Bash" ] && echo "$TOOL_INPUT" | grep -qE 'git push'; then
+    echo "[Contextify] Push detected. Ensure all commits from this session have been stored as memories."
+fi
+
+# --- Error patterns in bash output ---
+if [ "$TOOL_NAME" = "Bash" ] && echo "$TOOL_INPUT" | grep -qiE 'error|failed|fatal'; then
+    echo "[Contextify] Possible error encountered. If you resolved it, store the fix with store_memory (type: fix)."
+fi
+
+# --- PR creation detected ---
+if [ "$TOOL_NAME" = "Bash" ] && echo "$TOOL_INPUT" | grep -qE 'gh pr create'; then
+    echo "[Contextify] PR created. Store a summary memory of the entire PR scope with store_memory."
 fi
 
 # Always exit 0
