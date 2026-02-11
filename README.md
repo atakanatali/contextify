@@ -61,14 +61,22 @@ graph TB
 
 ## Quick Start
 
-Download [`docker-compose.prod.yml`](https://github.com/atakanatali/contextify/releases/latest/download/docker-compose.prod.yml) and run:
+Everything included in a single Docker image — PostgreSQL, Ollama, embeddings model, server, and Web UI:
+
+```bash
+docker run -d --name contextify -p 8420:8420 \
+  -v contextify-data:/var/lib/postgresql/data \
+  ghcr.io/atakanatali/contextify:latest
+```
+
+Or with Docker Compose:
 
 ```bash
 curl -fsSL https://github.com/atakanatali/contextify/releases/latest/download/docker-compose.prod.yml -o docker-compose.yml
 docker compose up
 ```
 
-Or for development (build from source):
+For development (separate services, build from source):
 
 ```bash
 git clone https://github.com/atakanatali/contextify.git
@@ -82,7 +90,29 @@ Services:
 - **MCP**: http://localhost:8420/mcp
 - **Health**: http://localhost:8420/health
 
-## Agent Setup
+## Automatic Setup
+
+The installer starts Contextify, detects your AI tools, and configures everything:
+
+```bash
+git clone https://github.com/atakanatali/contextify.git
+cd contextify
+./install.sh
+```
+
+What it does:
+- Starts `contextify:latest` Docker container (if not running)
+- Detects Claude Code, Cursor (auto)
+- Adds MCP server config to each tool
+- Installs Claude Code hooks (auto-context at session start)
+- Installs system prompt rules for each tool
+- Runs a self-test to verify everything works
+
+To uninstall: `./install.sh --uninstall`
+
+## Manual Agent Setup
+
+If you prefer manual configuration:
 
 ### Claude Code
 
@@ -101,7 +131,7 @@ Add to `~/.claude/settings.json`:
 
 ### Cursor
 
-Add to `.cursor/mcp.json`:
+Add to `~/.cursor/mcp.json`:
 
 ```json
 {
@@ -114,9 +144,9 @@ Add to `.cursor/mcp.json`:
 }
 ```
 
-### Gemini / Antigravity / Other
+### Gemini / Other
 
-Use the REST API. Add to your system prompt:
+Use the REST API. See [`prompts/gemini.md`](prompts/gemini.md) for the full prompt template.
 
 ```
 Memory API: http://localhost:8420/api/v1/
