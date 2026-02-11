@@ -40,14 +40,6 @@ services:
       SERVER_PORT: "8420"
     restart: unless-stopped
 
-  web:
-    image: ghcr.io/atakanatali/contextify-web:latest
-    ports:
-      - "3000:3000"
-    depends_on:
-      - server
-    restart: unless-stopped
-
 volumes:
   pgdata:
   ollama_models:

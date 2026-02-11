@@ -18,12 +18,12 @@ Unified memory system for AI agents. Provides shared short-term and long-term me
 ┌──────────────────────────────────────────────┐
 │                Docker Compose                │
 │                                              │
-│  PostgreSQL+pgvector  Ollama       Web UI    │
-│     :5432              :11434      :3000     │
-│         └───────┬───────┘            │       │
-│           Contextify Server ◄────────┘       │
-│           (Go) :8420                         │
-│           MCP + REST API                     │
+│  PostgreSQL+pgvector       Ollama            │
+│     :5432                   :11434           │
+│         └─────────┬─────────┘                │
+│            Contextify Server                 │
+│            (Go) :8420                        │
+│            MCP + REST API + Web UI           │
 └──────────────┬───────────────────────────────┘
                │
      AI Agents (MCP or REST)
@@ -47,9 +47,9 @@ docker compose up
 ```
 
 Services:
-- **API**: http://localhost:8420
+- **Web UI**: http://localhost:8420
+- **API**: http://localhost:8420/api/v1/
 - **MCP**: http://localhost:8420/mcp
-- **Web UI**: http://localhost:3000
 - **Health**: http://localhost:8420/health
 
 ## Agent Setup

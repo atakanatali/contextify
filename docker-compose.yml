@@ -42,18 +42,6 @@ services:
       SERVER_PORT: "8420"
     restart: unless-stopped
 
-  web:
-    build:
-      context: ./web
-      dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    depends_on:
-      - server
-    environment:
-      API_URL: http://server:8420
-    restart: unless-stopped
-
 volumes:
   pgdata:
   ollama_models:
