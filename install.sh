@@ -169,6 +169,35 @@ start_contextify() {
     ok "Contextify container started"
 }
 
+# ─── Update Contextify ───
+update_contextify() {
+    info "Updating Contextify..."
+
+    # Pull latest image
+    info "Pulling latest image..."
+    docker pull "${CONTEXTIFY_IMAGE}"
+
+    # Stop + remove old container (volume is preserved)
+    if docker ps --format '{{.Names}}' | grep -q '^contextify$'; then
+        info "Stopping current container..."
+        docker stop contextify
+    fi
+    if docker ps -a --format '{{.Names}}' | grep -q '^contextify$'; then
+        docker rm contextify
+    fi
+
+    # Start with new image, same volume
+    docker run -d \
+        --name contextify \
+        -p 8420:8420 \
+        -v contextify-data:/var/lib/postgresql/data \
+        --restart unless-stopped \
+        "${CONTEXTIFY_IMAGE}"
+
+    ok "Container recreated with latest image"
+    # Migrations run automatically on Go server startup
+}
+
 # ─── Health Check ───
 wait_for_health() {
     if curl -sf "${CONTEXTIFY_URL}/health" &>/dev/null; then
@@ -629,6 +658,7 @@ show_help() {
     echo "    ./install.sh --tools claude-code,cursor    Configure specific tools"
     echo "    ./install.sh --all                         Configure all tools"
     echo "    ./install.sh --status                      Show configuration status"
+    echo "    ./install.sh --update                      Update to latest version"
     echo "    ./install.sh --uninstall                   Remove all configurations"
     echo "    ./install.sh --help                        Show this help"
     echo ""
@@ -710,6 +740,8 @@ main() {
                 mode="non-interactive"
                 SELECTED_TOOLS=("claude-code" "cursor" "windsurf" "gemini")
                 ;;
+            --update)
+                mode="update" ;;
             --status)
                 mode="status" ;;
             --help|-h)
@@ -729,6 +761,14 @@ main() {
         status)
             check_prerequisites
             show_status
+            exit 0
+            ;;
+        update)
+            check_prerequisites
+            update_contextify
+            wait_for_health
+            run_self_test
+            ok "Contextify updated successfully!"
             exit 0
             ;;
         uninstall)

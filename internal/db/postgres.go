@@ -102,23 +102,36 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			return fmt.Errorf("read migration %s: %w", version, err)
 		}
 
-		tx, err := pool.Begin(ctx)
-		if err != nil {
-			return fmt.Errorf("begin transaction for %s: %w", version, err)
-		}
+		// Migrations with "-- no-transaction" marker run outside a transaction.
+		// Required for statements like ALTER TYPE ADD VALUE which cannot run in a transaction.
+		noTx := strings.HasPrefix(string(content), "-- no-transaction")
 
-		if _, err := tx.Exec(ctx, string(content)); err != nil {
-			tx.Rollback(ctx)
-			return fmt.Errorf("execute migration %s: %w", version, err)
-		}
+		if noTx {
+			if _, err := pool.Exec(ctx, string(content)); err != nil {
+				return fmt.Errorf("execute migration %s: %w", version, err)
+			}
+			if _, err := pool.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", version); err != nil {
+				return fmt.Errorf("record migration %s: %w", version, err)
+			}
+		} else {
+			tx, err := pool.Begin(ctx)
+			if err != nil {
+				return fmt.Errorf("begin transaction for %s: %w", version, err)
+			}
 
-		if _, err := tx.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", version); err != nil {
-			tx.Rollback(ctx)
-			return fmt.Errorf("record migration %s: %w", version, err)
-		}
+			if _, err := tx.Exec(ctx, string(content)); err != nil {
+				tx.Rollback(ctx)
+				return fmt.Errorf("execute migration %s: %w", version, err)
+			}
 
-		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("commit migration %s: %w", version, err)
+			if _, err := tx.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", version); err != nil {
+				tx.Rollback(ctx)
+				return fmt.Errorf("record migration %s: %w", version, err)
+			}
+
+			if err := tx.Commit(ctx); err != nil {
+				return fmt.Errorf("commit migration %s: %w", version, err)
+			}
 		}
 
 		slog.Info("applied migration", "version", version)
