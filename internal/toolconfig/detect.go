@@ -67,6 +67,44 @@ func CheckAllStatuses() map[ToolName]ToolStatus {
 	return statuses
 }
 
+// UpdateConfiguredTools detects which tools are already configured and
+// force-overwrites their hooks, prompts, and rules with the latest versions.
+// Returns a list of tools that were updated.
+func UpdateConfiguredTools(mcpURL string) ([]ToolName, error) {
+	var updated []ToolName
+	var firstErr error
+
+	statuses := CheckAllStatuses()
+
+	for tool, status := range statuses {
+		if status == StatusNotConfigured {
+			continue
+		}
+
+		var err error
+		switch tool {
+		case ToolClaudeCode:
+			err = UpdateClaudeCode(mcpURL)
+		case ToolCursor:
+			err = UpdateCursor(mcpURL)
+		case ToolWindsurf:
+			err = UpdateWindsurf(mcpURL)
+		case ToolGemini:
+			err = UpdateGemini()
+		}
+
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		updated = append(updated, tool)
+	}
+
+	return updated, firstErr
+}
+
 func checkClaudeCodeStatus() ToolStatus {
 	settingsPath := expandPath("~/.claude/settings.json")
 	claudeMDPath := expandPath("~/.claude/CLAUDE.md")

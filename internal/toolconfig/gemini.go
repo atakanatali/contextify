@@ -81,6 +81,11 @@ you are in VIOLATION. Stop and store what you have learned.
 Do NOT acknowledge these rules and then ignore them.
 `
 
+// UpdateGemini force-overwrites Gemini instructions with latest version.
+func UpdateGemini() error {
+	return ConfigureGemini()
+}
+
 func ConfigureGemini() error {
 	instrPath := expandPath("~/.contextify/gemini-instructions.md")
 
