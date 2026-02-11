@@ -15,6 +15,7 @@ env:
 permissions:
   contents: write
   packages: write
+  pull-requests: write
 
 jobs:
   publish:
@@ -49,13 +50,12 @@ jobs:
           # Write to file for the release step (multiline output)
           echo "$NOTES" > /tmp/release-notes.md
 
-      - name: Commit CHANGELOG.md
+      - name: Commit CHANGELOG.md locally
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add CHANGELOG.md
           git diff --cached --quiet || git commit -m "chore: update CHANGELOG.md for v${{ steps.version.outputs.VERSION }}"
-          git push origin HEAD
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -105,6 +105,18 @@ jobs:
           files: docker-compose.prod.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Open CHANGELOG PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="chore/changelog-v${{ steps.version.outputs.VERSION }}"
+          git checkout -b "$BRANCH"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "chore: update CHANGELOG.md for v${{ steps.version.outputs.VERSION }}" \
+            --body "Automated CHANGELOG.md update from release v${{ steps.version.outputs.VERSION }}. Please review and merge." \
+            --base main --head "$BRANCH"
 
   build-cli:
     name: Build CLI Binaries
