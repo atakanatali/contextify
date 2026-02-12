@@ -4,6 +4,8 @@
 # Installed by: install.sh → ~/.contextify/hooks/session-start.sh
 
 CONTEXTIFY_URL="${CONTEXTIFY_URL:-http://localhost:8420}"
+READY_FILE="/tmp/contextify-session-ready"
+REQUIRED_FILE="/tmp/contextify-context-required"
 
 # Read session info from stdin (Claude Code provides JSON)
 SESSION_INFO=$(cat 2>/dev/null || echo '{}')
@@ -15,6 +17,29 @@ if command -v jq &>/dev/null; then
 elif command -v python3 &>/dev/null; then
     CWD=$(echo "$SESSION_INFO" | python3 -c "import json,sys; print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null)
 fi
+
+# Extract session id (best-effort)
+SESSION_ID=""
+if command -v jq &>/dev/null; then
+    SESSION_ID=$(echo "$SESSION_INFO" | jq -r '.session_id // .sessionId // empty' 2>/dev/null)
+elif command -v python3 &>/dev/null; then
+    SESSION_ID=$(echo "$SESSION_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('session_id') or d.get('sessionId') or '')" 2>/dev/null)
+fi
+if [ -z "$SESSION_ID" ]; then
+    SESSION_ID="session-$(date +%s)"
+fi
+
+url_encode() {
+    if command -v python3 &>/dev/null; then
+        python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1" 2>/dev/null
+        return
+    fi
+    if command -v jq &>/dev/null; then
+        printf '%s' "$1" | jq -sRr @uri 2>/dev/null
+        return
+    fi
+    printf '%s' "$1"
+}
 
 # --- Project ID normalization ---
 # Resolves the CWD to a canonical project identifier using file-based detection.
@@ -188,14 +213,42 @@ fi
 # Check if Contextify is healthy
 if curl -sf "${CONTEXTIFY_URL}/health" &>/dev/null; then
     echo "[Contextify] Memory system is online."
-    if [ -n "$PROJECT_ID" ]; then
-        echo "[Contextify] IMPORTANT: Call get_context with project_id=\"${PROJECT_ID}\" to load project memories."
+
+    if [ -z "$PROJECT_ID" ]; then
+        rm -f "$READY_FILE"
+        touch "$REQUIRED_FILE"
+        echo "[Contextify] ⚠ Session NOT READY: project_id could not be resolved."
+        echo "[Contextify] FIRST ACTION MUST be get_context with the current project path."
     else
-        echo "[Contextify] IMPORTANT: Call get_context with the current project path to load project memories."
+        ENCODED_PROJECT_ID=$(url_encode "$PROJECT_ID")
+        CONTEXT_URL="${CONTEXTIFY_URL}/api/v1/context/${ENCODED_PROJECT_ID}"
+        CONTEXT_JSON=$(curl -sf -X POST "$CONTEXT_URL" \
+            -H "X-Session-ID: ${SESSION_ID}" \
+            -H "Content-Type: application/json" 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            MEM_COUNT="unknown"
+            if command -v jq &>/dev/null; then
+                MEM_COUNT=$(printf '%s' "$CONTEXT_JSON" | jq 'length' 2>/dev/null || echo "unknown")
+            fi
+            printf 'session_id=%s\nproject_id=%s\nloaded_at=%s\n' "$SESSION_ID" "$PROJECT_ID" "$(date -u +%FT%TZ)" > "$READY_FILE"
+            rm -f "$REQUIRED_FILE"
+            echo "[Contextify] Session READY: context preloaded for project_id=\"${PROJECT_ID}\" (${MEM_COUNT} memories)."
+        else
+            rm -f "$READY_FILE"
+            touch "$REQUIRED_FILE"
+            echo "[Contextify] ⚠ Session NOT READY: automatic context preload failed."
+            echo "[Contextify] FIRST ACTION MUST be get_context with project_id=\"${PROJECT_ID}\"."
+        fi
     fi
+
     echo "[Contextify] Store important findings with store_memory (agent_source: \"claude-code\")."
 else
+    rm -f "$READY_FILE"
+    touch "$REQUIRED_FILE"
     echo "[Contextify] Memory system is not running. Start with: docker start contextify"
+    if [ -n "$PROJECT_ID" ]; then
+        echo "[Contextify] Session NOT READY until get_context succeeds for project_id=\"${PROJECT_ID}\"."
+    fi
 fi
 
 # Always exit 0 — never block Claude Code

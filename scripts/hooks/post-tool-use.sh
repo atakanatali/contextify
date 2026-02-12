@@ -3,6 +3,8 @@
 # Enforces store_memory after git commits.
 # Installed by: install.sh → ~/.contextify/hooks/post-tool-use.sh
 
+READY_FILE="/tmp/contextify-session-ready"
+REQUIRED_FILE="/tmp/contextify-context-required"
 STATE_FILE="/tmp/contextify-pending-memory.$$"
 
 # Read tool use info from stdin
@@ -17,6 +19,21 @@ if command -v jq &>/dev/null; then
 elif command -v python3 &>/dev/null; then
     TOOL_NAME=$(echo "$TOOL_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_name',''))" 2>/dev/null)
     TOOL_INPUT=$(echo "$TOOL_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null)
+fi
+
+# --- Session readiness enforcement (get_context must run first when required) ---
+if [ "$TOOL_NAME" = "mcp__contextify__get_context" ]; then
+    rm -f "$REQUIRED_FILE"
+    touch "$READY_FILE"
+    echo "[Contextify] Session READY: get_context executed."
+elif [ -f "$REQUIRED_FILE" ]; then
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "⛔ [Contextify] SESSION NOT READY: get_context has not succeeded yet."
+    echo "   FIRST action MUST be mcp__contextify__get_context."
+    echo "   Do not continue with normal workflow before context is loaded."
+    echo "═══════════════════════════════════════════════════════════════"
+    echo ""
 fi
 
 # --- State machine: track commit → store_memory flow ---
