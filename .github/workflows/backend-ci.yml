@@ -26,8 +26,11 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Build
+      - name: Build server
         run: go build -o contextify ./cmd/server
+
+      - name: Build CLI
+        run: go build -o contextify-cli ./cmd/contextify
 
   health-check:
     name: Health Check

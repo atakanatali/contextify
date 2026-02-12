@@ -4,6 +4,10 @@
 *.test
 *.out
 
+# Build output
+bin/
+dist/
+
 # Dependencies
 /vendor/
 

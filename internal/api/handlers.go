@@ -226,6 +226,16 @@ func (h *Handlers) PromoteMemory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "promoted", "id": id.String()})
 }
 
+// GET /api/v1/analytics
+func (h *Handlers) GetAnalytics(w http.ResponseWriter, r *http.Request) {
+	data, err := h.svc.GetAnalytics(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
 // Health check
 func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

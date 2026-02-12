@@ -42,11 +42,12 @@ check_docker_status() {
 }
 
 check_claude_code_status() {
+    local mcp_config="${HOME}/.claude.json"
     local settings="${HOME}/.claude/settings.json"
     local claude_md="${HOME}/.claude/CLAUDE.md"
     local has_mcp=false has_hooks=false has_md=false
 
-    json_has_key "$settings" "mcpServers.contextify" 2>/dev/null && has_mcp=true
+    json_has_key "$mcp_config" "mcpServers.contextify" 2>/dev/null && has_mcp=true
     if [ -f "$settings" ] && grep -q "session-start.sh" "$settings" 2>/dev/null; then
         has_hooks=true
     fi
@@ -169,6 +170,35 @@ start_contextify() {
     ok "Contextify container started"
 }
 
+# ─── Update Contextify ───
+update_contextify() {
+    info "Updating Contextify..."
+
+    # Pull latest image
+    info "Pulling latest image..."
+    docker pull "${CONTEXTIFY_IMAGE}"
+
+    # Stop + remove old container (volume is preserved)
+    if docker ps --format '{{.Names}}' | grep -q '^contextify$'; then
+        info "Stopping current container..."
+        docker stop contextify
+    fi
+    if docker ps -a --format '{{.Names}}' | grep -q '^contextify$'; then
+        docker rm contextify
+    fi
+
+    # Start with new image, same volume
+    docker run -d \
+        --name contextify \
+        -p 8420:8420 \
+        -v contextify-data:/var/lib/postgresql/data \
+        --restart unless-stopped \
+        "${CONTEXTIFY_IMAGE}"
+
+    ok "Container recreated with latest image"
+    # Migrations run automatically on Go server startup
+}
+
 # ─── Health Check ───
 wait_for_health() {
     if curl -sf "${CONTEXTIFY_URL}/health" &>/dev/null; then
@@ -249,15 +279,22 @@ interactive_tool_selection() {
 configure_claude_code() {
     info "Configuring Claude Code..."
 
+    local mcp_config="${HOME}/.claude.json"
     local settings="${HOME}/.claude/settings.json"
     mkdir -p "${HOME}/.claude"
 
-    # 1. MCP server
+    # Migration: clean up old incorrect location (settings.json → .claude.json)
     if json_has_key "$settings" "mcpServers.contextify" 2>/dev/null; then
+        json_remove_key "$settings" "mcpServers.contextify" 2>/dev/null || true
+        info "Migrated MCP config from settings.json to ~/.claude.json"
+    fi
+
+    # 1. MCP server → ~/.claude.json (Claude Code reads MCP servers from here)
+    if json_has_key "$mcp_config" "mcpServers.contextify" 2>/dev/null; then
         ok "MCP server already configured (skipping)"
     else
-        json_set_nested "$settings" "mcpServers.contextify" '{"type":"streamableHttp","url":"'"${CONTEXTIFY_MCP_URL}"'"}'
-        ok "Added MCP server to ${settings}"
+        json_set_nested "$mcp_config" "mcpServers.contextify" '{"type":"http","url":"'"${CONTEXTIFY_MCP_URL}"'"}'
+        ok "Added MCP server to ${mcp_config}"
     fi
 
     # 2. Install hooks
@@ -288,8 +325,28 @@ HOOKEOF
 TOOL_INFO=$(cat 2>/dev/null || echo '{}')
 TOOL_NAME=""; TOOL_INPUT=""
 if command -v jq &>/dev/null; then TOOL_NAME=$(echo "$TOOL_INFO" | jq -r '.tool_name // empty' 2>/dev/null); TOOL_INPUT=$(echo "$TOOL_INFO" | jq -r '.tool_input.command // empty' 2>/dev/null); fi
+# State machine: enforce store_memory after git commit
+if [ -f /tmp/contextify-pending-memory ]; then
+    if [ "$TOOL_NAME" = "mcp__contextify__store_memory" ]; then
+        rm -f /tmp/contextify-pending-memory
+    else
+        echo ""
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "⛔ [Contextify] VIOLATION: You ran '$TOOL_NAME' after a git commit"
+        echo "   without calling store_memory first!"
+        echo "   STOP what you are doing. Call store_memory NOW."
+        echo "═══════════════════════════════════════════════════════════════"
+        echo ""
+    fi
+fi
 if [ "$TOOL_NAME" = "Bash" ] && echo "$TOOL_INPUT" | grep -qE 'git commit'; then
-    echo "[Contextify] Commit detected. Consider storing what was fixed/added with store_memory."
+    touch /tmp/contextify-pending-memory
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "🔴 [Contextify] COMMIT DETECTED — store_memory is REQUIRED"
+    echo "   Your NEXT action MUST be store_memory."
+    echo "═══════════════════════════════════════════════════════════════"
+    echo ""
 fi
 exit 0
 HOOKEOF
@@ -482,6 +539,95 @@ run_self_test() {
     ok "Self-test passed!"
 }
 
+# ─── Update Tool Configs ───
+# Force-overwrite hooks, prompts, and rules for all configured tools.
+update_tool_configs() {
+    info "Updating tool configurations..."
+
+    local claude_status cursor_status windsurf_status gemini_status
+    claude_status=$(check_claude_code_status)
+    cursor_status=$(check_cursor_status)
+    windsurf_status=$(check_windsurf_status)
+    gemini_status=$(check_gemini_status)
+
+    local updated=0
+
+    if [ "$claude_status" != "not-configured" ]; then
+        # Force-overwrite hooks
+        mkdir -p "${HOOKS_DIR}"
+        if [ -f "${SCRIPT_DIR}/scripts/hooks/session-start.sh" ]; then
+            cp "${SCRIPT_DIR}/scripts/hooks/session-start.sh" "${HOOKS_DIR}/"
+            cp "${SCRIPT_DIR}/scripts/hooks/post-tool-use.sh" "${HOOKS_DIR}/"
+        fi
+        chmod +x "${HOOKS_DIR}/session-start.sh" "${HOOKS_DIR}/post-tool-use.sh" 2>/dev/null || true
+
+        # Force-overwrite CLAUDE.md contextify block
+        local claude_md="${HOME}/.claude/CLAUDE.md"
+        if [ -f "$claude_md" ] && grep -qF "$CONTEXTIFY_MARKER" "$claude_md"; then
+            # Remove old block
+            if command -v python3 &>/dev/null; then
+                python3 -c "
+import re
+with open('$claude_md', 'r') as f:
+    content = f.read()
+content = re.sub(r'\n?$CONTEXTIFY_MARKER.*?<!-- /contextify-memory-system -->\n?', '', content, flags=re.DOTALL)
+with open('$claude_md', 'w') as f:
+    f.write(content)
+"
+            fi
+        fi
+        # Re-append latest prompt
+        local prompt_content=""
+        if [ -f "${SCRIPT_DIR}/prompts/claude-code.md" ]; then
+            prompt_content=$(cat "${SCRIPT_DIR}/prompts/claude-code.md")
+        fi
+        if [ -n "$prompt_content" ]; then
+            {
+                echo ""
+                echo "$CONTEXTIFY_MARKER"
+                echo "$prompt_content"
+                echo "<!-- /contextify-memory-system -->"
+            } >> "$claude_md"
+        fi
+        ok "Claude Code configs updated"
+        updated=$((updated + 1))
+    fi
+
+    if [ "$cursor_status" != "not-configured" ]; then
+        local rules_dir="${HOME}/.cursor/rules"
+        mkdir -p "$rules_dir"
+        if [ -f "${SCRIPT_DIR}/prompts/cursorrules.md" ]; then
+            cp "${SCRIPT_DIR}/prompts/cursorrules.md" "${rules_dir}/contextify.md"
+        fi
+        ok "Cursor configs updated"
+        updated=$((updated + 1))
+    fi
+
+    if [ "$windsurf_status" != "not-configured" ]; then
+        local rules_dir="${HOME}/.codeium/windsurf/memories"
+        mkdir -p "$rules_dir"
+        if [ -f "${SCRIPT_DIR}/prompts/windsurf.md" ]; then
+            cp "${SCRIPT_DIR}/prompts/windsurf.md" "${rules_dir}/contextify.md"
+        fi
+        ok "Windsurf configs updated"
+        updated=$((updated + 1))
+    fi
+
+    if [ "$gemini_status" != "not-configured" ]; then
+        local dest="${HOME}/.contextify/gemini-instructions.md"
+        mkdir -p "${HOME}/.contextify"
+        if [ -f "${SCRIPT_DIR}/prompts/gemini.md" ]; then
+            cp "${SCRIPT_DIR}/prompts/gemini.md" "$dest"
+        fi
+        ok "Gemini configs updated"
+        updated=$((updated + 1))
+    fi
+
+    if [ "$updated" -eq 0 ]; then
+        info "No configured tools found to update."
+    fi
+}
+
 # ─── Restart Tools ───
 restart_tools() {
     local needs_restart=false
@@ -569,13 +715,20 @@ print_summary() {
 uninstall() {
     info "Uninstalling Contextify configurations..."
 
-    # Claude Code
+    # Claude Code — MCP server from ~/.claude.json
+    local mcp_config="${HOME}/.claude.json"
+    if [ -f "$mcp_config" ]; then
+        json_remove_key "$mcp_config" "mcpServers.contextify" 2>/dev/null || true
+        ok "Removed Claude Code MCP config"
+    fi
+
+    # Claude Code — also clean up old incorrect location
     local claude_settings="${HOME}/.claude/settings.json"
     if [ -f "$claude_settings" ]; then
         json_remove_key "$claude_settings" "mcpServers.contextify" 2>/dev/null || true
         json_remove_hook "$claude_settings" "SessionStart" "${HOOKS_DIR}/session-start.sh" 2>/dev/null || true
         json_remove_hook "$claude_settings" "PostToolUse" "${HOOKS_DIR}/post-tool-use.sh" 2>/dev/null || true
-        ok "Removed Claude Code MCP + hooks config"
+        ok "Removed Claude Code hooks config"
     fi
 
     # CLAUDE.md — remove marker block
@@ -629,6 +782,7 @@ show_help() {
     echo "    ./install.sh --tools claude-code,cursor    Configure specific tools"
     echo "    ./install.sh --all                         Configure all tools"
     echo "    ./install.sh --status                      Show configuration status"
+    echo "    ./install.sh --update                      Update to latest version"
     echo "    ./install.sh --uninstall                   Remove all configurations"
     echo "    ./install.sh --help                        Show this help"
     echo ""
@@ -710,6 +864,8 @@ main() {
                 mode="non-interactive"
                 SELECTED_TOOLS=("claude-code" "cursor" "windsurf" "gemini")
                 ;;
+            --update)
+                mode="update" ;;
             --status)
                 mode="status" ;;
             --help|-h)
@@ -729,6 +885,15 @@ main() {
         status)
             check_prerequisites
             show_status
+            exit 0
+            ;;
+        update)
+            check_prerequisites
+            update_contextify
+            wait_for_health
+            update_tool_configs
+            run_self_test
+            ok "Contextify updated successfully!"
             exit 0
             ;;
         uninstall)

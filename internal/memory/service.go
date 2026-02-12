@@ -190,9 +190,7 @@ func (s *Service) storeNew(ctx context.Context, req StoreRequest, emb *pgvector.
 	if mem.Tags == nil {
 		mem.Tags = []string{}
 	}
-	if mem.Type == "" {
-		mem.Type = TypeGeneral
-	}
+	mem.Type = NormalizeType(mem.Type)
 	if mem.Scope == "" {
 		mem.Scope = ScopeProject
 	}
@@ -351,6 +349,10 @@ func (s *Service) GetContext(ctx context.Context, projectID string) ([]Memory, e
 
 func (s *Service) GetStats(ctx context.Context) (*Stats, error) {
 	return s.repo.GetStats(ctx)
+}
+
+func (s *Service) GetAnalytics(ctx context.Context) (*AnalyticsData, error) {
+	return s.repo.GetAnalytics(ctx)
 }
 
 func (s *Service) CleanupExpired(ctx context.Context) (int64, error) {

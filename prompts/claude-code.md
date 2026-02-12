@@ -45,4 +45,11 @@ create_relationship(from_memory_id: solution_id, to_memory_id: problem_id, relat
 | 0.5-0.7 | Standard solutions, workflows | 24h, extended on access |
 | 0.3-0.4 | Temporary notes, minor observations | 24h, expires if unused |
 
+### CRITICAL: Git Commit → store_memory (MANDATORY)
+
+After EVERY `git commit`, you MUST immediately call `store_memory` before doing anything else.
+This is not optional. Do NOT proceed to the next task, PR creation, or any other action until `store_memory` is called.
+
+Violation: If you run any tool after `git commit` that is not `store_memory`, you are in violation.
+
 Do NOT wait to be asked. Memory operations are automatic and proactive.

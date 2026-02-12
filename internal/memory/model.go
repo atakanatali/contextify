@@ -10,15 +10,41 @@ import (
 type MemoryType string
 
 const (
-	TypeSolution    MemoryType = "solution"
-	TypeProblem     MemoryType = "problem"
-	TypeCodePattern MemoryType = "code_pattern"
-	TypeFix         MemoryType = "fix"
-	TypeError       MemoryType = "error"
-	TypeWorkflow    MemoryType = "workflow"
-	TypeDecision    MemoryType = "decision"
-	TypeGeneral     MemoryType = "general"
+	TypeSolution     MemoryType = "solution"
+	TypeProblem      MemoryType = "problem"
+	TypeCodePattern  MemoryType = "code_pattern"
+	TypeFix          MemoryType = "fix"
+	TypeError        MemoryType = "error"
+	TypeWorkflow     MemoryType = "workflow"
+	TypeDecision     MemoryType = "decision"
+	TypeGeneral      MemoryType = "general"
+	TypeTask         MemoryType = "task"
+	TypeTechnology   MemoryType = "technology"
+	TypeCommand      MemoryType = "command"
+	TypeFileContext  MemoryType = "file_context"
+	TypeConversation MemoryType = "conversation"
+	TypeProject      MemoryType = "project"
 )
+
+// ValidTypes contains all known memory types accepted by the database.
+var ValidTypes = map[MemoryType]bool{
+	TypeSolution: true, TypeProblem: true, TypeCodePattern: true,
+	TypeFix: true, TypeError: true, TypeWorkflow: true,
+	TypeDecision: true, TypeGeneral: true, TypeTask: true,
+	TypeTechnology: true, TypeCommand: true, TypeFileContext: true,
+	TypeConversation: true, TypeProject: true,
+}
+
+// NormalizeType returns the type as-is if valid, or TypeGeneral for unknown types.
+func NormalizeType(t MemoryType) MemoryType {
+	if t == "" {
+		return TypeGeneral
+	}
+	if ValidTypes[t] {
+		return t
+	}
+	return TypeGeneral
+}
 
 type MemoryScope string
 
@@ -116,6 +142,31 @@ type Stats struct {
 	ShortTermCount     int            `json:"short_term_count"`
 	ExpiringCount      int            `json:"expiring_count"`
 	PendingSuggestions int            `json:"pending_suggestions"`
+}
+
+type AnalyticsData struct {
+	TotalTokensStored   int64            `json:"total_tokens_stored"`
+	TotalTokensSaved    int64            `json:"total_tokens_saved"`
+	TotalHits           int64            `json:"total_hits"`
+	HitRate             float64          `json:"hit_rate"`
+	TopAccessedMemories []MemorySummary  `json:"top_accessed_memories"`
+	TokensByAgent       map[string]int64 `json:"tokens_by_agent"`
+	Timeline            []TimelineEntry  `json:"timeline"`
+}
+
+type MemorySummary struct {
+	ID          uuid.UUID  `json:"id"`
+	Title       string     `json:"title"`
+	Type        MemoryType `json:"type"`
+	AccessCount int        `json:"access_count"`
+	TokenCount  int        `json:"token_count"`
+	AgentSource *string    `json:"agent_source,omitempty"`
+}
+
+type TimelineEntry struct {
+	Date    string `json:"date"`
+	Created int    `json:"created"`
+	Hits    int    `json:"hits"`
 }
 
 // StoreResult is returned by Store() with dedup information.

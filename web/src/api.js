@@ -14,6 +14,7 @@ async function request(path, options = {}) {
 
 export const api = {
   getStats: () => request('/stats'),
+  getAnalytics: () => request('/analytics'),
 
   getMemory: (id) => request(`/memories/${id}`),
 
