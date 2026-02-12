@@ -39,6 +39,12 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Post-tool-use hook state machine — enforces `store_memory` after every `git commit` with violation nagging
 - `contextify update` and `install.sh --update` now force-overwrite tool configs (hooks, prompts, rules) with latest versions
 - `UpdateConfiguredTools()` function for centralized tool config updates
+- **CLI self-update** — `contextify update` now updates both the Docker server and the CLI binary from GitHub Releases
+  - Downloads platform-specific binary (darwin/linux, amd64/arm64), verifies it, and replaces the current binary
+  - Falls back to `sudo` if direct replacement fails (e.g., `/usr/local/bin`)
+  - `--skip-cli` flag to update server only
+- **Update confirmation prompt** — `contextify update` warns that active MCP sessions will disconnect and asks for confirmation (`y/N`)
+  - `-y` / `--yes` flag to skip the prompt (for scripts/CI)
 
 ### Changed
 - Post-tool-use hook output upgraded from soft reminder to aggressive required/violation messages
