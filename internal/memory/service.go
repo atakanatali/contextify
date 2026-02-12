@@ -47,16 +47,64 @@ func (s *Service) normalizeProjectPtr(id *string) {
 	*id = s.normalizer.Normalize(*id)
 }
 
+func contextString(ctx context.Context, key string) *string {
+	v, ok := ctx.Value(key).(string)
+	if !ok || v == "" {
+		return nil
+	}
+	return &v
+}
+
+func (s *Service) emitTelemetryEvent(event TelemetryEvent) {
+	go func(ev TelemetryEvent) {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := s.repo.StoreTelemetryEvent(bgCtx, &ev); err != nil {
+			slog.Warn("failed to store telemetry event", "event_type", ev.EventType, "error", err)
+		}
+	}(event)
+}
+
 // Store creates a new memory with smart dedup.
 // If consolidation is enabled and a highly similar memory exists (>= AutoMergeThreshold),
 // the existing memory is updated instead. Moderate similarity returns suggestions.
 func (s *Service) Store(ctx context.Context, req StoreRequest) (*StoreResult, error) {
 	// Normalize project_id
 	s.normalizeProjectPtr(req.ProjectID)
+	sessionID := contextString(ctx, "session_id")
+	requestID := contextString(ctx, "request_id")
+
+	s.emitTelemetryEvent(TelemetryEvent{
+		EventType:   TelemetryStoreOpportunity,
+		SessionID:   sessionID,
+		RequestID:   requestID,
+		AgentSource: req.AgentSource,
+		ProjectID:   req.ProjectID,
+		Metadata: map[string]any{
+			"type":       req.Type,
+			"scope":      req.Scope,
+			"importance": req.Importance,
+		},
+	})
+
+	emitStoreAction := func(action string, memoryID *uuid.UUID, metadata map[string]any) {
+		a := action
+		s.emitTelemetryEvent(TelemetryEvent{
+			EventType:   TelemetryStoreAction,
+			SessionID:   sessionID,
+			RequestID:   requestID,
+			AgentSource: req.AgentSource,
+			ProjectID:   req.ProjectID,
+			MemoryID:    memoryID,
+			Action:      &a,
+			Metadata:    metadata,
+		})
+	}
 
 	// Generate embedding
 	vec, err := s.embedder.Embed(ctx, req.Title+" "+req.Content)
 	if err != nil {
+		emitStoreAction("error", nil, map[string]any{"stage": "embed"})
 		return nil, fmt.Errorf("generate embedding: %w", err)
 	}
 
@@ -82,6 +130,7 @@ func (s *Service) Store(ctx context.Context, req StoreRequest) (*StoreResult, er
 			// Re-embed merged content
 			mergedVec, err := s.embedder.Embed(ctx, title+" "+content)
 			if err != nil {
+				emitStoreAction("error", nil, map[string]any{"stage": "reembed_merge"})
 				return nil, fmt.Errorf("re-embed merged content: %w", err)
 			}
 			mergedEmb := pgvector.NewVector(mergedVec)
@@ -92,6 +141,7 @@ func (s *Service) Store(ctx context.Context, req StoreRequest) (*StoreResult, er
 			mergedFrom[0] = existing.ID // track the original state
 
 			if err := s.repo.UpdateMergeFields(ctx, existing.ID, title, content, tags, importance, mergedFrom, &mergedEmb); err != nil {
+				emitStoreAction("error", nil, map[string]any{"stage": "update_merge_fields"})
 				return nil, fmt.Errorf("auto-merge update: %w", err)
 			}
 
@@ -124,15 +174,23 @@ func (s *Service) Store(ctx context.Context, req StoreRequest) (*StoreResult, er
 				"strategy", strategy,
 			)
 
-			return &StoreResult{
+			result := &StoreResult{
 				Memory:          updated,
 				Action:          "updated",
 				UpdatedExisting: updated,
-			}, nil
+			}
+			if result.Memory != nil {
+				memID := result.Memory.ID
+				emitStoreAction(result.Action, &memID, map[string]any{"similarity": similar[0].Similarity})
+			} else {
+				emitStoreAction(result.Action, nil, map[string]any{"similarity": similar[0].Similarity})
+			}
+			return result, nil
 		} else if len(similar) > 0 {
 			// Store normally but attach suggestions
 			mem, err := s.storeNew(ctx, req, &emb)
 			if err != nil {
+				emitStoreAction("error", nil, map[string]any{"stage": "store_new_with_suggestions"})
 				return nil, err
 			}
 
@@ -144,24 +202,31 @@ func (s *Service) Store(ctx context.Context, req StoreRequest) (*StoreResult, er
 				}
 			}
 
-			return &StoreResult{
+			result := &StoreResult{
 				Memory:      mem,
 				Action:      "created_with_suggestions",
 				Suggestions: suggestions,
-			}, nil
+			}
+			memID := result.Memory.ID
+			emitStoreAction(result.Action, &memID, map[string]any{"suggestions": len(suggestions)})
+			return result, nil
 		}
 	}
 
 	// Normal store (no dedup or consolidation disabled)
 	mem, err := s.storeNew(ctx, req, &emb)
 	if err != nil {
+		emitStoreAction("error", nil, map[string]any{"stage": "store_new"})
 		return nil, err
 	}
 
-	return &StoreResult{
+	result := &StoreResult{
 		Memory: mem,
 		Action: "created",
-	}, nil
+	}
+	memID := result.Memory.ID
+	emitStoreAction(result.Action, &memID, nil)
+	return result, nil
 }
 
 // storeNew creates a new memory (the original Store logic).
@@ -281,8 +346,21 @@ func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
 }
 
 func (s *Service) Search(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
+	start := time.Now()
+
 	// Normalize project_id
 	s.normalizeProjectPtr(req.ProjectID)
+	sessionID := contextString(ctx, "session_id")
+	requestID := contextString(ctx, "request_id")
+
+	s.emitTelemetryEvent(TelemetryEvent{
+		EventType:   TelemetryRecallAttempt,
+		SessionID:   sessionID,
+		RequestID:   requestID,
+		AgentSource: req.AgentSource,
+		ProjectID:   req.ProjectID,
+		QueryText:   &req.Query,
+	})
 
 	if req.Limit <= 0 {
 		req.Limit = s.searchCfg.DefaultLimit
@@ -301,6 +379,19 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]SearchResult
 	if err != nil {
 		return nil, err
 	}
+
+	hitCount := len(results)
+	latencyMs := int(time.Since(start).Milliseconds())
+	s.emitTelemetryEvent(TelemetryEvent{
+		EventType:   TelemetryRecallHit,
+		SessionID:   sessionID,
+		RequestID:   requestID,
+		AgentSource: req.AgentSource,
+		ProjectID:   req.ProjectID,
+		QueryText:   &req.Query,
+		HitCount:    &hitCount,
+		LatencyMs:   &latencyMs,
+	})
 
 	// Increment access for returned results
 	for _, r := range results {

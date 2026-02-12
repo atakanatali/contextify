@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -15,7 +16,14 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 			reqID = uuid.New().String()[:8]
 		}
 		w.Header().Set("X-Request-ID", reqID)
-		next.ServeHTTP(w, r)
+
+		ctx := context.WithValue(r.Context(), "request_id", reqID)
+		if sessionID := r.Header.Get("X-Session-ID"); sessionID != "" {
+			w.Header().Set("X-Session-ID", sessionID)
+			ctx = context.WithValue(ctx, "session_id", sessionID)
+		}
+
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
