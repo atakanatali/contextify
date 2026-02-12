@@ -32,7 +32,7 @@ and interact with the memory system from the command line.`,
 	rootCmd.AddCommand(newStopCmd())
 	rootCmd.AddCommand(newRestartCmd())
 	rootCmd.AddCommand(newLogsCmd())
-	rootCmd.AddCommand(newUpdateCmd())
+	rootCmd.AddCommand(newUpdateCmd(version))
 	rootCmd.AddCommand(newStatusCmd())
 	rootCmd.AddCommand(newInstallCmd())
 	rootCmd.AddCommand(newUninstallCmd())

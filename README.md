@@ -115,8 +115,10 @@ contextify install                      # Full setup (pull, start, configure too
 contextify start                        # Start the container
 contextify stop                         # Stop the container
 contextify restart                      # Restart the container
-contextify update                       # Update to latest version
-contextify update -v 0.4.0              # Update to specific version
+contextify update                       # Update server + CLI (with confirmation)
+contextify update -y                    # Update without confirmation prompt
+contextify update -v 0.6.0              # Update to specific version
+contextify update --skip-cli            # Update server only, keep current CLI
 contextify status                       # Show health, container, and tool status
 contextify logs                         # Show container logs
 contextify logs -f                      # Follow container logs
