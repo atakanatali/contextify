@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -18,6 +19,38 @@ type Repository struct {
 
 func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
+}
+
+func (r *Repository) StoreTelemetryEvent(ctx context.Context, event *TelemetryEvent) error {
+	if event == nil {
+		return nil
+	}
+
+	metadata := event.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("marshal telemetry metadata: %w", err)
+	}
+
+	query := `
+		INSERT INTO memory_telemetry_events (
+			event_type, session_id, request_id, agent_source, project_id,
+			memory_id, query_text, action, hit_count, latency_ms, metadata
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+	`
+	_, err = r.pool.Exec(ctx, query,
+		string(event.EventType), event.SessionID, event.RequestID, event.AgentSource, event.ProjectID,
+		event.MemoryID, event.QueryText, event.Action, event.HitCount, event.LatencyMs, string(metadataJSON),
+	)
+	if err != nil {
+		return fmt.Errorf("store telemetry event: %w", err)
+	}
+
+	return nil
 }
 
 func (r *Repository) Store(ctx context.Context, mem *Memory) error {

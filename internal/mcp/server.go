@@ -1,8 +1,10 @@
 package mcp
 
 import (
+	"context"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/atakanatali/contextify/internal/memory"
@@ -35,9 +37,25 @@ func NewServer(svc *memory.Service) *Server {
 }
 
 func (s *Server) Handler() http.Handler {
-	return mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
+	base := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
 		return s.mcpServer
 	}, nil)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqID := r.Header.Get("X-Request-ID")
+		if reqID == "" {
+			reqID = uuid.New().String()[:8]
+		}
+		w.Header().Set("X-Request-ID", reqID)
+
+		ctx := context.WithValue(r.Context(), "request_id", reqID)
+		if sessionID := r.Header.Get("X-Session-ID"); sessionID != "" {
+			w.Header().Set("X-Session-ID", sessionID)
+			ctx = context.WithValue(ctx, "session_id", sessionID)
+		}
+
+		base.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func (s *Server) MCPServer() *mcp.Server {

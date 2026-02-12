@@ -108,21 +108,46 @@ type UpdateRequest struct {
 }
 
 type SearchRequest struct {
-	Query         string      `json:"query"`
-	Type          *MemoryType `json:"type,omitempty"`
+	Query         string       `json:"query"`
+	Type          *MemoryType  `json:"type,omitempty"`
 	Scope         *MemoryScope `json:"scope,omitempty"`
-	ProjectID     *string     `json:"project_id,omitempty"`
-	AgentSource   *string     `json:"agent_source,omitempty"`
-	Tags          []string    `json:"tags,omitempty"`
-	MinImportance *float32    `json:"min_importance,omitempty"`
-	Limit         int         `json:"limit"`
-	Offset        int         `json:"offset"`
+	ProjectID     *string      `json:"project_id,omitempty"`
+	AgentSource   *string      `json:"agent_source,omitempty"`
+	Tags          []string     `json:"tags,omitempty"`
+	MinImportance *float32     `json:"min_importance,omitempty"`
+	Limit         int          `json:"limit"`
+	Offset        int          `json:"offset"`
 }
 
 type SearchResult struct {
-	Memory     Memory  `json:"memory"`
-	Score      float64 `json:"score"`
-	MatchType  string  `json:"match_type"` // "semantic", "keyword", "hybrid"
+	Memory    Memory  `json:"memory"`
+	Score     float64 `json:"score"`
+	MatchType string  `json:"match_type"` // "semantic", "keyword", "hybrid"
+}
+
+type TelemetryEventType string
+
+const (
+	TelemetryRecallAttempt    TelemetryEventType = "recall_attempt"
+	TelemetryRecallHit        TelemetryEventType = "recall_hit"
+	TelemetryStoreOpportunity TelemetryEventType = "store_opportunity"
+	TelemetryStoreAction      TelemetryEventType = "store_action"
+)
+
+type TelemetryEvent struct {
+	ID          uuid.UUID          `json:"id"`
+	EventType   TelemetryEventType `json:"event_type"`
+	SessionID   *string            `json:"session_id,omitempty"`
+	RequestID   *string            `json:"request_id,omitempty"`
+	AgentSource *string            `json:"agent_source,omitempty"`
+	ProjectID   *string            `json:"project_id,omitempty"`
+	MemoryID    *uuid.UUID         `json:"memory_id,omitempty"`
+	QueryText   *string            `json:"query_text,omitempty"`
+	Action      *string            `json:"action,omitempty"`
+	HitCount    *int               `json:"hit_count,omitempty"`
+	LatencyMs   *int               `json:"latency_ms,omitempty"`
+	Metadata    map[string]any     `json:"metadata,omitempty"`
+	CreatedAt   time.Time          `json:"created_at"`
 }
 
 type RelationshipRequest struct {
