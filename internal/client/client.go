@@ -40,11 +40,14 @@ func (c *Client) Health(ctx context.Context) error {
 }
 
 func (c *Client) StoreMemory(ctx context.Context, req StoreRequest) (*Memory, error) {
-	var mem Memory
-	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/memories", req, &mem); err != nil {
+	var result StoreResult
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/memories", req, &result); err != nil {
 		return nil, err
 	}
-	return &mem, nil
+	if result.Memory == nil {
+		return nil, fmt.Errorf("store memory: empty memory in response")
+	}
+	return result.Memory, nil
 }
 
 func (c *Client) GetMemory(ctx context.Context, id string) (*Memory, error) {
@@ -67,12 +70,12 @@ func (c *Client) DeleteMemory(ctx context.Context, id string) error {
 	return c.doJSON(ctx, http.MethodDelete, "/api/v1/memories/"+id, nil, nil)
 }
 
-func (c *Client) PromoteMemory(ctx context.Context, id string) (*Memory, error) {
-	var mem Memory
-	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/memories/"+id+"/promote", nil, &mem); err != nil {
+func (c *Client) PromoteMemory(ctx context.Context, id string) (*PromoteResponse, error) {
+	var resp PromoteResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v1/memories/"+id+"/promote", nil, &resp); err != nil {
 		return nil, err
 	}
-	return &mem, nil
+	return &resp, nil
 }
 
 func (c *Client) Recall(ctx context.Context, req SearchRequest) ([]SearchResult, error) {

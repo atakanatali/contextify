@@ -20,6 +20,16 @@ type Memory struct {
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 }
 
+type StoreResult struct {
+	Memory *Memory `json:"memory"`
+	Action string  `json:"action"`
+}
+
+type PromoteResponse struct {
+	Status string `json:"status"`
+	ID     string `json:"id"`
+}
+
 type StoreRequest struct {
 	Title       string   `json:"title"`
 	Content     string   `json:"content"`

@@ -18,11 +18,16 @@ func newPromoteCmd() *cobra.Command {
 
 func runPromote(cmd *cobra.Command, args []string) error {
 	c := client.New(getServerURL())
-	mem, err := c.PromoteMemory(cmd.Context(), args[0])
+	mem, getErr := c.GetMemory(cmd.Context(), args[0])
+	resp, err := c.PromoteMemory(cmd.Context(), args[0])
 	if err != nil {
 		return fmt.Errorf("promote memory: %w", err)
 	}
 
-	printOK(fmt.Sprintf("Memory promoted to permanent: %s (%s)", mem.Title, mem.ID))
+	if getErr == nil && mem != nil {
+		printOK(fmt.Sprintf("Memory promoted to permanent: %s (%s)", mem.Title, resp.ID))
+		return nil
+	}
+	printOK(fmt.Sprintf("Memory promoted to permanent: %s", resp.ID))
 	return nil
 }
