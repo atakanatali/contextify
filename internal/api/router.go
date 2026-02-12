@@ -60,6 +60,7 @@ func NewRouter(svc *memory.Service) *chi.Mux {
 		// Stats & Analytics
 		r.Get("/stats", h.GetStats)
 		r.Get("/analytics", h.GetAnalytics)
+		r.Get("/analytics/funnel", h.GetFunnelAnalytics)
 
 		// Context
 		r.Post("/context/{project}", h.GetContext)
