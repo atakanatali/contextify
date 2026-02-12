@@ -186,7 +186,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Docker image publishing and CI/CD pipeline
 - Architecture documentation
 
-[Unreleased]: https://github.com/atakanatali/contextify/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/atakanatali/contextify/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/atakanatali/contextify/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/atakanatali/contextify/compare/v0.5.3...v0.6.1
 [0.5.3]: https://github.com/atakanatali/contextify/compare/v0.2.0...v0.5.3
 [0.2.0]: https://github.com/atakanatali/contextify/compare/v0.1.0...v0.2.0
