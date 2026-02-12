@@ -5,6 +5,7 @@ You have access to Contextify, a shared memory system across all your AI tools. 
 ### Session Start
 At the START of every session, IMMEDIATELY call `get_context` with `project_id` set to the current working directory.
 This loads all relevant memories (solutions, patterns, decisions) for the current project.
+Until `get_context` succeeds, the session is NOT READY and normal task work should not start.
 
 ### When to Store Memories
 Call `store_memory` automatically when ANY of these occur:

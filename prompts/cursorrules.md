@@ -4,6 +4,8 @@ You have access to Contextify, a shared memory system via MCP tools. Use it proa
 
 ## Session Start
 At the beginning of each session, call `get_context` with the current workspace path as `project_id`.
+Until `get_context` succeeds, the session is NOT READY and normal task work should not start.
+If hooks are unavailable in your environment, this manual `get_context` step is mandatory.
 
 ## When to Store Memories
 Store memories automatically when you:

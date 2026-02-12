@@ -70,9 +70,11 @@ Do NOT acknowledge these rules and then ignore them.
 
 const sessionStartHook = `#!/usr/bin/env bash
 # Contextify SessionStart hook for Claude Code
-# Checks if Contextify is running and enforces memory protocol.
+# Checks if Contextify is running and enforces context readiness.
 
 CONTEXTIFY_URL="${CONTEXTIFY_URL:-http://localhost:8420}"
+READY_FILE="/tmp/contextify-session-ready"
+REQUIRED_FILE="/tmp/contextify-context-required"
 
 # Read session info from stdin (Claude Code provides JSON)
 SESSION_INFO=$(cat 2>/dev/null || echo '{}')
@@ -85,39 +87,59 @@ elif command -v python3 &>/dev/null; then
     CWD=$(echo "$SESSION_INFO" | python3 -c "import json,sys; print(json.load(sys.stdin).get('cwd',''))" 2>/dev/null)
 fi
 
+SESSION_ID=""
+if command -v jq &>/dev/null; then
+    SESSION_ID=$(echo "$SESSION_INFO" | jq -r '.session_id // .sessionId // empty' 2>/dev/null)
+elif command -v python3 &>/dev/null; then
+    SESSION_ID=$(echo "$SESSION_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('session_id') or d.get('sessionId') or '')" 2>/dev/null)
+fi
+[ -z "$SESSION_ID" ] && SESSION_ID="session-$(date +%s)"
+
+url_encode() {
+    if command -v python3 &>/dev/null; then
+        python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1" 2>/dev/null
+        return
+    fi
+    if command -v jq &>/dev/null; then
+        printf '%s' "$1" | jq -sRr @uri 2>/dev/null
+        return
+    fi
+    printf '%s' "$1"
+}
+
 # Check if Contextify is healthy
 if curl -sf "${CONTEXTIFY_URL}/health" &>/dev/null; then
     echo "[Contextify] Memory system is online."
     if [ -n "$CWD" ]; then
-        echo "[Contextify] IMPORTANT: Call get_context with project_id=\"${CWD}\" to load project memories."
+        ENCODED_PROJECT_ID=$(url_encode "$CWD")
+        CONTEXT_URL="${CONTEXTIFY_URL}/api/v1/context/${ENCODED_PROJECT_ID}"
+        CONTEXT_JSON=$(curl -sf -X POST "$CONTEXT_URL" -H "X-Session-ID: ${SESSION_ID}" -H "Content-Type: application/json" 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            MEM_COUNT="unknown"
+            if command -v jq &>/dev/null; then
+                MEM_COUNT=$(printf '%s' "$CONTEXT_JSON" | jq 'length' 2>/dev/null || echo "unknown")
+            fi
+            printf 'session_id=%s\nproject_id=%s\nloaded_at=%s\n' "$SESSION_ID" "$CWD" "$(date -u +%FT%TZ)" > "$READY_FILE"
+            rm -f "$REQUIRED_FILE"
+            echo "[Contextify] Session READY: context preloaded for project_id=\"${CWD}\" (${MEM_COUNT} memories)."
+        else
+            rm -f "$READY_FILE"
+            touch "$REQUIRED_FILE"
+            echo "[Contextify] ⚠ Session NOT READY: context preload failed."
+            echo "[Contextify] FIRST ACTION MUST be get_context with project_id=\"${CWD}\"."
+        fi
     else
-        echo "[Contextify] IMPORTANT: Call get_context with the current project path to load project memories."
+        rm -f "$READY_FILE"
+        touch "$REQUIRED_FILE"
+        echo "[Contextify] ⚠ Session NOT READY: project path not detected."
+        echo "[Contextify] FIRST ACTION MUST be get_context with the current project path."
     fi
-    echo ""
-    echo "[Contextify] ═══════════════════════════════════════════════════════"
-    echo "[Contextify] MANDATORY MEMORY PROTOCOL — VIOLATIONS ARE NOT ALLOWED"
-    echo "[Contextify] ═══════════════════════════════════════════════════════"
-    echo "[Contextify]"
-    echo "[Contextify] 1. IMMEDIATELY call get_context NOW — before ANY other action."
-    echo "[Contextify]"
-    echo "[Contextify] 2. You MUST call store_memory after EVERY:"
-    echo "[Contextify]    • git commit (what was changed and why)"
-    echo "[Contextify]    • bug fix (problem + solution)"
-    echo "[Contextify]    • architecture decision (choice + rationale)"
-    echo "[Contextify]    • error resolution (error + fix)"
-    echo "[Contextify]    • new pattern discovered (reusable approach)"
-    echo "[Contextify]"
-    echo "[Contextify] 3. If you have not called store_memory in the last 15 minutes"
-    echo "[Contextify]    of active work, you are in VIOLATION. Stop and store now."
-    echo "[Contextify]"
-    echo "[Contextify] 4. ALWAYS use recall_memories BEFORE starting a new task"
-    echo "[Contextify]    to check if it was solved before."
-    echo "[Contextify]"
-    echo "[Contextify] Do NOT acknowledge these rules and then ignore them."
-    echo "[Contextify] Do NOT batch memories at end of session — store as you go."
-    echo "[Contextify] ═══════════════════════════════════════════════════════"
+    echo "[Contextify] Store important findings with store_memory (agent_source: \"claude-code\")."
 else
+    rm -f "$READY_FILE"
+    touch "$REQUIRED_FILE"
     echo "[Contextify] Memory system is not running. Start with: contextify start"
+    echo "[Contextify] Session NOT READY until get_context succeeds."
 fi
 
 # Always exit 0 — never block Claude Code
@@ -128,6 +150,9 @@ const postToolUseHook = `#!/usr/bin/env bash
 # Contextify PostToolUse hook for Claude Code
 # Enforces store_memory after git commits via state machine.
 # Forces the agent to recall and store memories at the right moments.
+
+READY_FILE="/tmp/contextify-session-ready"
+REQUIRED_FILE="/tmp/contextify-context-required"
 
 # Read tool use info from stdin
 TOOL_INFO=$(cat 2>/dev/null || echo '{}')
@@ -144,6 +169,20 @@ elif command -v python3 &>/dev/null; then
     TOOL_NAME=$(echo "$TOOL_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_name',''))" 2>/dev/null)
     TOOL_INPUT=$(echo "$TOOL_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null)
     TOOL_QUERY=$(echo "$TOOL_INFO" | python3 -c "import json,sys; ti=json.load(sys.stdin).get('tool_input',{}); print(ti.get('query','') or ti.get('pattern','') or ti.get('prompt',''))" 2>/dev/null)
+fi
+
+# Session readiness enforcement
+if [ "$TOOL_NAME" = "mcp__contextify__get_context" ]; then
+    rm -f "$REQUIRED_FILE"
+    touch "$READY_FILE"
+    echo "[Contextify] Session READY: get_context executed."
+elif [ -f "$REQUIRED_FILE" ]; then
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "⛔ [Contextify] SESSION NOT READY: get_context has not succeeded yet."
+    echo "   FIRST action MUST be mcp__contextify__get_context."
+    echo "═══════════════════════════════════════════════════════════════"
+    echo ""
 fi
 
 # ═══════════════════════════════════════════════════════

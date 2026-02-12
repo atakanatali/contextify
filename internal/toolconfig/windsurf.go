@@ -15,6 +15,8 @@ This is NOT optional. You MUST follow the protocol below.
 ## 1. SESSION START — REQUIRED FIRST ACTION
 IMMEDIATELY call ` + "`get_context`" + ` with the current workspace path as ` + "`project_id`" + `.
 Do this BEFORE any other action. No exceptions.
+Until ` + "`get_context`" + ` succeeds, the session is NOT READY.
+If hooks are unavailable in your environment, this manual first step is mandatory.
 
 ## 2. BEFORE EVERY SEARCH OR INVESTIGATION — RECALL FIRST
 BEFORE you search the codebase, read docs, or research a topic:
