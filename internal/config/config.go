@@ -56,10 +56,13 @@ type ConsolidationConfig struct {
 }
 
 type SearchConfig struct {
-	VectorWeight  float64 `yaml:"vector_weight"`
-	KeywordWeight float64 `yaml:"keyword_weight"`
-	DefaultLimit  int     `yaml:"default_limit"`
-	MaxLimit      int     `yaml:"max_limit"`
+	VectorWeight    float64       `yaml:"vector_weight"`
+	KeywordWeight   float64       `yaml:"keyword_weight"`
+	DefaultLimit    int           `yaml:"default_limit"`
+	MaxLimit        int           `yaml:"max_limit"`
+	CacheEnabled    bool          `yaml:"cache_enabled"`
+	CacheTTL        time.Duration `yaml:"cache_ttl"`
+	CacheMaxEntries int           `yaml:"cache_max_entries"`
 }
 
 func Load(path string) (*Config, error) {
@@ -79,7 +82,15 @@ func Load(path string) (*Config, error) {
 				ReplacedRetention:  7 * 24 * time.Hour,
 			},
 		},
-		Search:    SearchConfig{VectorWeight: 0.7, KeywordWeight: 0.3, DefaultLimit: 20, MaxLimit: 100},
+		Search: SearchConfig{
+			VectorWeight:    0.7,
+			KeywordWeight:   0.3,
+			DefaultLimit:    20,
+			MaxLimit:        100,
+			CacheEnabled:    true,
+			CacheTTL:        30 * time.Second,
+			CacheMaxEntries: 500,
+		},
 	}
 
 	if path != "" {
@@ -128,5 +139,18 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("NORMALIZE_PROJECT_ID"); v != "" {
 		cfg.Memory.NormalizeProjectID = v == "true" || v == "1"
+	}
+	if v := os.Getenv("SEARCH_CACHE_ENABLED"); v != "" {
+		cfg.Search.CacheEnabled = v == "true" || v == "1"
+	}
+	if v := os.Getenv("SEARCH_CACHE_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Search.CacheTTL = d
+		}
+	}
+	if v := os.Getenv("SEARCH_CACHE_MAX_ENTRIES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.Search.CacheMaxEntries = n
+		}
 	}
 }
