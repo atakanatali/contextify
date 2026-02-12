@@ -949,5 +949,163 @@ func (r *Repository) GetAnalytics(ctx context.Context) (*AnalyticsData, error) {
 	return data, nil
 }
 
+// GetFunnelAnalytics returns recall/store funnel metrics and breakdowns.
+func (r *Repository) GetFunnelAnalytics(ctx context.Context, req FunnelAnalyticsRequest) (*FunnelAnalyticsData, error) {
+	data := &FunnelAnalyticsData{
+		Timeline:  []FunnelTimelineEntry{},
+		ByAgent:   []FunnelBreakdown{},
+		ByProject: []FunnelBreakdown{},
+	}
+
+	conditions := []string{
+		"e.created_at >= $1",
+		"e.created_at < $2",
+	}
+	args := []any{req.From, req.To}
+	argIdx := 3
+
+	if req.AgentSource != nil && *req.AgentSource != "" {
+		conditions = append(conditions, fmt.Sprintf("e.agent_source = $%d", argIdx))
+		args = append(args, *req.AgentSource)
+		argIdx++
+	}
+	if req.ProjectID != nil && *req.ProjectID != "" {
+		conditions = append(conditions, fmt.Sprintf("e.project_id = $%d", argIdx))
+		args = append(args, *req.ProjectID)
+		argIdx++
+	}
+
+	where := strings.Join(conditions, " AND ")
+
+	totalsQuery := fmt.Sprintf(`
+		SELECT
+			COUNT(*) FILTER (WHERE e.event_type = 'recall_attempt') AS recall_attempts,
+			COUNT(*) FILTER (WHERE e.event_type = 'recall_hit' AND COALESCE(e.hit_count, 0) > 0) AS recall_hits,
+			COUNT(*) FILTER (WHERE e.event_type = 'store_opportunity') AS store_opportunities,
+			COUNT(*) FILTER (WHERE e.event_type = 'store_action' AND COALESCE(e.action, '') <> 'error') AS store_actions
+		FROM memory_telemetry_events e
+		WHERE %s
+	`, where)
+	if err := r.pool.QueryRow(ctx, totalsQuery, args...).Scan(
+		&data.RecallAttempts,
+		&data.RecallHits,
+		&data.StoreOpportunities,
+		&data.StoreActions,
+	); err != nil {
+		return nil, fmt.Errorf("funnel totals: %w", err)
+	}
+
+	if data.RecallAttempts > 0 {
+		data.RecallHitRate = float64(data.RecallHits) / float64(data.RecallAttempts)
+	}
+	if data.StoreOpportunities > 0 {
+		data.StoreCaptureRate = float64(data.StoreActions) / float64(data.StoreOpportunities)
+	}
+
+	timelineQuery := fmt.Sprintf(`
+		WITH filtered AS (
+			SELECT e.created_at::date AS day, e.event_type, e.hit_count, e.action
+			FROM memory_telemetry_events e
+			WHERE %s
+		),
+		days AS (
+			SELECT generate_series($1::date, ($2::date - INTERVAL '1 day')::date, INTERVAL '1 day')::date AS day
+		)
+		SELECT
+			d.day,
+			COUNT(*) FILTER (WHERE f.event_type = 'recall_attempt') AS recall_attempts,
+			COUNT(*) FILTER (WHERE f.event_type = 'recall_hit' AND COALESCE(f.hit_count, 0) > 0) AS recall_hits,
+			COUNT(*) FILTER (WHERE f.event_type = 'store_opportunity') AS store_opportunities,
+			COUNT(*) FILTER (WHERE f.event_type = 'store_action' AND COALESCE(f.action, '') <> 'error') AS store_actions
+		FROM days d
+		LEFT JOIN filtered f ON f.day = d.day
+		GROUP BY d.day
+		ORDER BY d.day
+	`, where)
+	rows, err := r.pool.Query(ctx, timelineQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("funnel timeline: %w", err)
+	}
+	for rows.Next() {
+		var entry FunnelTimelineEntry
+		var day time.Time
+		if err := rows.Scan(&day, &entry.RecallAttempts, &entry.RecallHits, &entry.StoreOpportunities, &entry.StoreActions); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan funnel timeline: %w", err)
+		}
+		entry.Date = day.Format("2006-01-02")
+		data.Timeline = append(data.Timeline, entry)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("iterate funnel timeline: %w", err)
+	}
+	rows.Close()
+
+	byAgentQuery := fmt.Sprintf(`
+		SELECT
+			COALESCE(e.agent_source, 'unknown') AS key,
+			COUNT(*) FILTER (WHERE e.event_type = 'recall_attempt') AS recall_attempts,
+			COUNT(*) FILTER (WHERE e.event_type = 'recall_hit' AND COALESCE(e.hit_count, 0) > 0) AS recall_hits,
+			COUNT(*) FILTER (WHERE e.event_type = 'store_opportunity') AS store_opportunities,
+			COUNT(*) FILTER (WHERE e.event_type = 'store_action' AND COALESCE(e.action, '') <> 'error') AS store_actions
+		FROM memory_telemetry_events e
+		WHERE %s
+		GROUP BY COALESCE(e.agent_source, 'unknown')
+		ORDER BY recall_hits DESC, recall_attempts DESC
+		LIMIT 20
+	`, where)
+	rows, err = r.pool.Query(ctx, byAgentQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("funnel by agent: %w", err)
+	}
+	for rows.Next() {
+		var entry FunnelBreakdown
+		if err := rows.Scan(&entry.Key, &entry.RecallAttempts, &entry.RecallHits, &entry.StoreOpportunities, &entry.StoreActions); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan funnel by agent: %w", err)
+		}
+		data.ByAgent = append(data.ByAgent, entry)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("iterate funnel by agent: %w", err)
+	}
+	rows.Close()
+
+	byProjectQuery := fmt.Sprintf(`
+		SELECT
+			COALESCE(e.project_id, 'unknown') AS key,
+			COUNT(*) FILTER (WHERE e.event_type = 'recall_attempt') AS recall_attempts,
+			COUNT(*) FILTER (WHERE e.event_type = 'recall_hit' AND COALESCE(e.hit_count, 0) > 0) AS recall_hits,
+			COUNT(*) FILTER (WHERE e.event_type = 'store_opportunity') AS store_opportunities,
+			COUNT(*) FILTER (WHERE e.event_type = 'store_action' AND COALESCE(e.action, '') <> 'error') AS store_actions
+		FROM memory_telemetry_events e
+		WHERE %s
+		GROUP BY COALESCE(e.project_id, 'unknown')
+		ORDER BY recall_hits DESC, recall_attempts DESC
+		LIMIT 20
+	`, where)
+	rows, err = r.pool.Query(ctx, byProjectQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("funnel by project: %w", err)
+	}
+	for rows.Next() {
+		var entry FunnelBreakdown
+		if err := rows.Scan(&entry.Key, &entry.RecallAttempts, &entry.RecallHits, &entry.StoreOpportunities, &entry.StoreActions); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan funnel by project: %w", err)
+		}
+		data.ByProject = append(data.ByProject, entry)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("iterate funnel by project: %w", err)
+	}
+	rows.Close()
+
+	return data, nil
+}
+
 // Ensure unused import doesn't cause error
 var _ = time.Now

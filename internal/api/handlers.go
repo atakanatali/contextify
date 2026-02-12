@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -229,6 +230,59 @@ func (h *Handlers) PromoteMemory(w http.ResponseWriter, r *http.Request) {
 // GET /api/v1/analytics
 func (h *Handlers) GetAnalytics(w http.ResponseWriter, r *http.Request) {
 	data, err := h.svc.GetAnalytics(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, data)
+}
+
+// GET /api/v1/analytics/funnel
+func (h *Handlers) GetFunnelAnalytics(w http.ResponseWriter, r *http.Request) {
+	days := 30
+	if v := r.URL.Query().Get("days"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 || n > 365 {
+			writeError(w, http.StatusBadRequest, "days must be an integer between 1 and 365")
+			return
+		}
+		days = n
+	}
+
+	var req memory.FunnelAnalyticsRequest
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+	if fromStr != "" || toStr != "" {
+		if fromStr == "" || toStr == "" {
+			writeError(w, http.StatusBadRequest, "both from and to are required when using explicit date range")
+			return
+		}
+		from, err := time.Parse("2006-01-02", fromStr)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "from must be in YYYY-MM-DD format")
+			return
+		}
+		to, err := time.Parse("2006-01-02", toStr)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "to must be in YYYY-MM-DD format")
+			return
+		}
+		req.From = from
+		req.To = to
+	} else {
+		now := time.Now().UTC()
+		req.To = now
+		req.From = now.AddDate(0, 0, -(days - 1))
+	}
+
+	if v := r.URL.Query().Get("agent_source"); v != "" {
+		req.AgentSource = &v
+	}
+	if v := r.URL.Query().Get("project_id"); v != "" {
+		req.ProjectID = &v
+	}
+
+	data, err := h.svc.GetFunnelAnalytics(r.Context(), req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

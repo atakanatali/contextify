@@ -179,6 +179,41 @@ type AnalyticsData struct {
 	Timeline            []TimelineEntry  `json:"timeline"`
 }
 
+type FunnelAnalyticsRequest struct {
+	From        time.Time `json:"from"`
+	To          time.Time `json:"to"`
+	AgentSource *string   `json:"agent_source,omitempty"`
+	ProjectID   *string   `json:"project_id,omitempty"`
+}
+
+type FunnelAnalyticsData struct {
+	RecallAttempts     int64                 `json:"recall_attempts"`
+	RecallHits         int64                 `json:"recall_hits"`
+	StoreOpportunities int64                 `json:"store_opportunities"`
+	StoreActions       int64                 `json:"store_actions"`
+	RecallHitRate      float64               `json:"recall_hit_rate"`
+	StoreCaptureRate   float64               `json:"store_capture_rate"`
+	Timeline           []FunnelTimelineEntry `json:"timeline"`
+	ByAgent            []FunnelBreakdown     `json:"by_agent"`
+	ByProject          []FunnelBreakdown     `json:"by_project"`
+}
+
+type FunnelTimelineEntry struct {
+	Date               string `json:"date"`
+	RecallAttempts     int64  `json:"recall_attempts"`
+	RecallHits         int64  `json:"recall_hits"`
+	StoreOpportunities int64  `json:"store_opportunities"`
+	StoreActions       int64  `json:"store_actions"`
+}
+
+type FunnelBreakdown struct {
+	Key                string `json:"key"`
+	RecallAttempts     int64  `json:"recall_attempts"`
+	RecallHits         int64  `json:"recall_hits"`
+	StoreOpportunities int64  `json:"store_opportunities"`
+	StoreActions       int64  `json:"store_actions"`
+}
+
 type MemorySummary struct {
 	ID          uuid.UUID  `json:"id"`
 	Title       string     `json:"title"`

@@ -446,6 +446,29 @@ func (s *Service) GetAnalytics(ctx context.Context) (*AnalyticsData, error) {
 	return s.repo.GetAnalytics(ctx)
 }
 
+func (s *Service) GetFunnelAnalytics(ctx context.Context, req FunnelAnalyticsRequest) (*FunnelAnalyticsData, error) {
+	now := time.Now().UTC()
+
+	if req.From.IsZero() || req.To.IsZero() {
+		req.To = now
+		req.From = now.AddDate(0, 0, -29)
+	}
+
+	req.From = time.Date(req.From.Year(), req.From.Month(), req.From.Day(), 0, 0, 0, 0, time.UTC)
+	req.To = time.Date(req.To.Year(), req.To.Month(), req.To.Day(), 0, 0, 0, 0, time.UTC).Add(24 * time.Hour)
+
+	if !req.To.After(req.From) {
+		return nil, fmt.Errorf("invalid date range: to must be after from")
+	}
+
+	if req.ProjectID != nil {
+		normalized := s.normalizeProject(*req.ProjectID)
+		req.ProjectID = &normalized
+	}
+
+	return s.repo.GetFunnelAnalytics(ctx, req)
+}
+
 func (s *Service) CleanupExpired(ctx context.Context) (int64, error) {
 	return s.repo.DeleteExpired(ctx)
 }

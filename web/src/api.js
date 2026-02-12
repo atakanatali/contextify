@@ -15,6 +15,14 @@ async function request(path, options = {}) {
 export const api = {
   getStats: () => request('/stats'),
   getAnalytics: () => request('/analytics'),
+  getFunnelAnalytics: ({ days = 30, from, to, agentSource, projectId } = {}) =>
+    request(`/analytics/funnel?${new URLSearchParams({
+      ...(days ? { days: String(days) } : {}),
+      ...(from && { from }),
+      ...(to && { to }),
+      ...(agentSource && { agent_source: agentSource }),
+      ...(projectId && { project_id: projectId }),
+    })}`),
 
   getMemory: (id) => request(`/memories/${id}`),
 
