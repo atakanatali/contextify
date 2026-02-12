@@ -148,30 +148,34 @@ exit 0
 
 const postToolUseHook = `#!/usr/bin/env bash
 # Contextify PostToolUse hook for Claude Code
-# Enforces store_memory after git commits via state machine.
-# Forces the agent to recall and store memories at the right moments.
+# Enforces session readiness and auto-store for high-confidence events.
 
+CONTEXTIFY_URL="${CONTEXTIFY_URL:-http://localhost:8420}"
 READY_FILE="/tmp/contextify-session-ready"
 REQUIRED_FILE="/tmp/contextify-context-required"
+PENDING_FILE="/tmp/contextify-pending-memory"
 
 # Read tool use info from stdin
 TOOL_INFO=$(cat 2>/dev/null || echo '{}')
 
-# Extract tool name and input
+# Extract tool metadata
 TOOL_NAME=""
 TOOL_INPUT=""
-TOOL_QUERY=""
+TOOL_OUTPUT=""
+CWD=""
 if command -v jq &>/dev/null; then
     TOOL_NAME=$(echo "$TOOL_INFO" | jq -r '.tool_name // empty' 2>/dev/null)
     TOOL_INPUT=$(echo "$TOOL_INFO" | jq -r '.tool_input.command // empty' 2>/dev/null)
-    TOOL_QUERY=$(echo "$TOOL_INFO" | jq -r '.tool_input.query // .tool_input.pattern // .tool_input.prompt // empty' 2>/dev/null)
+    TOOL_OUTPUT=$(echo "$TOOL_INFO" | jq -r '.tool_output // .result // empty' 2>/dev/null)
+    CWD=$(echo "$TOOL_INFO" | jq -r '.cwd // .tool_input.cwd // empty' 2>/dev/null)
 elif command -v python3 &>/dev/null; then
     TOOL_NAME=$(echo "$TOOL_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_name',''))" 2>/dev/null)
     TOOL_INPUT=$(echo "$TOOL_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null)
-    TOOL_QUERY=$(echo "$TOOL_INFO" | python3 -c "import json,sys; ti=json.load(sys.stdin).get('tool_input',{}); print(ti.get('query','') or ti.get('pattern','') or ti.get('prompt',''))" 2>/dev/null)
+    TOOL_OUTPUT=$(echo "$TOOL_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tool_output') or d.get('result') or '')" 2>/dev/null)
+    CWD=$(echo "$TOOL_INFO" | python3 -c "import json,sys; d=json.load(sys.stdin); ti=d.get('tool_input',{}); print(d.get('cwd') or ti.get('cwd') or '')" 2>/dev/null)
 fi
 
-# Session readiness enforcement
+# Session readiness enforcement (get_context must run first when required)
 if [ "$TOOL_NAME" = "mcp__contextify__get_context" ]; then
     rm -f "$REQUIRED_FILE"
     touch "$READY_FILE"
@@ -181,19 +185,102 @@ elif [ -f "$REQUIRED_FILE" ]; then
     echo "═══════════════════════════════════════════════════════════════"
     echo "⛔ [Contextify] SESSION NOT READY: get_context has not succeeded yet."
     echo "   FIRST action MUST be mcp__contextify__get_context."
+    echo "   Do not continue with normal workflow before context is loaded."
     echo "═══════════════════════════════════════════════════════════════"
     echo ""
 fi
 
-# ═══════════════════════════════════════════════════════
-# STATE MACHINE: enforce store_memory after git commit
-# ═══════════════════════════════════════════════════════
+build_store_payload() {
+    local title="$1"
+    local content="$2"
+    local mem_type="$3"
+    local importance="$4"
+    local scope="global"
+    [ -n "$CWD" ] && scope="project"
+
+    if command -v jq &>/dev/null; then
+        jq -n \
+            --arg title "$title" \
+            --arg content "$content" \
+            --arg type "$mem_type" \
+            --arg scope "$scope" \
+            --arg project "$CWD" \
+            --arg agent "claude-code" \
+            --argjson importance "$importance" \
+            '{
+                title: $title,
+                content: $content,
+                type: $type,
+                scope: $scope,
+                project_id: (if $project == "" then null else $project end),
+                agent_source: $agent,
+                tags: ["auto-store", $type, "high-confidence"],
+                importance: $importance
+            }'
+        return
+    fi
+
+    if command -v python3 &>/dev/null; then
+        python3 - "$title" "$content" "$mem_type" "$scope" "$CWD" "$importance" <<'PY'
+import json, sys
+title, content, mem_type, scope, cwd, importance = sys.argv[1:]
+payload = {
+    "title": title,
+    "content": content,
+    "type": mem_type,
+    "scope": scope,
+    "project_id": cwd or None,
+    "agent_source": "claude-code",
+    "tags": ["auto-store", mem_type, "high-confidence"],
+    "importance": float(importance),
+}
+print(json.dumps(payload))
+PY
+        return
+    fi
+
+    return 1
+}
+
+auto_store_memory() {
+    local title="$1"
+    local content="$2"
+    local mem_type="$3"
+    local importance="$4"
+
+    [ -z "$title" ] && return 1
+    [ -z "$content" ] && return 1
+
+    local payload
+    payload=$(build_store_payload "$title" "$content" "$mem_type" "$importance") || return 1
+
+    curl -sf -X POST "${CONTEXTIFY_URL}/api/v1/memories" \
+        -H "Content-Type: application/json" \
+        -d "$payload" >/dev/null 2>&1
+}
+
+is_high_confidence() {
+    local score="$1"
+    awk "BEGIN { exit !($score >= 0.85) }"
+}
+
+extract_commit_message() {
+    local cmd="$1"
+    local msg
+    msg=$(echo "$cmd" | sed -nE 's/.*-m[[:space:]]+"([^"]+)".*/\1/p')
+    if [ -z "$msg" ]; then
+        msg=$(echo "$cmd" | sed -nE "s/.*-m[[:space:]]+'([^']+)'.*/\1/p")
+    fi
+    echo "$msg"
+}
+
+# State machine: track commit -> store_memory flow
 
 # Check if there's a pending memory from a previous commit
-if [ -f /tmp/contextify-pending-memory ]; then
+if [ -f "$PENDING_FILE" ]; then
     if [ "$TOOL_NAME" = "mcp__contextify__store_memory" ]; then
         # Good — memory stored after commit
-        rm -f /tmp/contextify-pending-memory
+        rm -f "$PENDING_FILE"
     else
         # VIOLATION: something else ran after commit instead of store_memory
         echo ""
@@ -211,73 +298,58 @@ if [ -f /tmp/contextify-pending-memory ]; then
     fi
 fi
 
-# ═══════════════════════════════════════════════════════
-# STORE triggers — you just did something worth remembering
-# ═══════════════════════════════════════════════════════
-
-# --- Git commit detected ---
+# Auto-store orchestration (high-confidence only)
 if [ "$TOOL_NAME" = "Bash" ] && echo "$TOOL_INPUT" | grep -qE 'git commit'; then
-    touch /tmp/contextify-pending-memory
-    echo ""
-    echo "═══════════════════════════════════════════════════════════════"
-    echo "🔴 [Contextify] COMMIT DETECTED — store_memory is REQUIRED"
-    echo ""
-    echo "   Your NEXT action MUST be store_memory."
-    echo "   Do NOT proceed to any other task until memory is stored."
-    echo "   • title: what was committed"
-    echo "   • content: detailed description of the change and why"
-    echo "   • type: fix | decision | code_pattern | workflow"
-    echo "   • importance: 0.7+ for fixes, 0.8+ for architecture decisions"
-    echo "═══════════════════════════════════════════════════════════════"
-    echo ""
+    COMMIT_MSG=$(extract_commit_message "$TOOL_INPUT")
+    CLASSIFIER_TEXT="$TOOL_INPUT $COMMIT_MSG"
+    MEM_TYPE="workflow"
+    IMPORTANCE="0.65"
+    CONFIDENCE="0.70"
+
+    if echo "$CLASSIFIER_TEXT" | grep -qiE '\b(fix|bug|hotfix|resolve|resolved)\b'; then
+        MEM_TYPE="fix"
+        IMPORTANCE="0.78"
+        CONFIDENCE="0.95"
+    elif echo "$CLASSIFIER_TEXT" | grep -qiE '\b(decision|architecture|design|adr)\b'; then
+        MEM_TYPE="decision"
+        IMPORTANCE="0.82"
+        CONFIDENCE="0.92"
+    fi
+
+    if is_high_confidence "$CONFIDENCE"; then
+        TITLE="AutoStore: git commit"
+        [ -n "$COMMIT_MSG" ] && TITLE="AutoStore: git commit - ${COMMIT_MSG}"
+        CONTENT="High-confidence auto-store from git commit.
+- command: ${TOOL_INPUT}
+- commit_message: ${COMMIT_MSG:-n/a}
+- detected_type: ${MEM_TYPE}
+- confidence: ${CONFIDENCE}
+- timestamp: $(date -u +%FT%TZ)"
+
+        if auto_store_memory "$TITLE" "$CONTENT" "$MEM_TYPE" "$IMPORTANCE"; then
+            rm -f "$PENDING_FILE"
+            echo "[Contextify] Auto-stored ${MEM_TYPE} memory from commit (confidence ${CONFIDENCE})."
+        else
+            touch "$PENDING_FILE"
+            echo "[Contextify] Auto-store failed after commit. Manual store_memory is required."
+        fi
+    else
+        touch "$PENDING_FILE"
+        echo "[Contextify] Commit detected. Manual store_memory required (confidence below threshold)."
+    fi
 fi
 
-# --- Git push detected ---
-if [ "$TOOL_NAME" = "Bash" ] && echo "$TOOL_INPUT" | grep -qE 'git push'; then
-    echo "[Contextify] Push detected. Ensure all commits from this session have been stored as memories."
-fi
-
-# --- PR creation detected ---
-if [ "$TOOL_NAME" = "Bash" ] && echo "$TOOL_INPUT" | grep -qE 'gh pr create'; then
-    echo "[Contextify] PR created. Store a summary memory of the entire PR scope with store_memory."
-fi
-
-# --- Error resolved ---
-if [ "$TOOL_NAME" = "Bash" ] && echo "$TOOL_INPUT" | grep -qiE 'error|failed|fatal'; then
-    echo "[Contextify] Possible error encountered. If you resolved it, store the fix with store_memory (type: fix)."
-fi
-
-# ═══════════════════════════════════════════════════════
-# RECALL triggers — you're researching, check memory first
-# ═══════════════════════════════════════════════════════
-
-# --- Grep/search in codebase = exploring something ---
-if [ "$TOOL_NAME" = "Grep" ] || [ "$TOOL_NAME" = "Glob" ]; then
-    echo "[Contextify] 🔍 You are searching the codebase. Did you recall_memories first?"
-    echo "[Contextify] If this is a new task or investigation, call recall_memories with the topic BEFORE continuing."
-fi
-
-# --- WebSearch = researching a topic ---
-if [ "$TOOL_NAME" = "WebSearch" ]; then
-    echo "[Contextify] 🌐 Web search detected. Call recall_memories first — this may already be solved in memory."
-    echo "[Contextify] After finding the answer, store_memory the solution for future sessions."
-fi
-
-# --- WebFetch = reading external docs ---
-if [ "$TOOL_NAME" = "WebFetch" ]; then
-    echo "[Contextify] 📄 External content fetched. If you learned something reusable, store_memory it."
-fi
-
-# --- Task/Agent = delegating complex work ---
-if [ "$TOOL_NAME" = "Task" ]; then
-    echo "[Contextify] 🔀 Agent task launched. When it completes, store_memory the findings if significant."
-fi
-
-# --- Read = exploring config/infra files ---
-if [ "$TOOL_NAME" = "Read" ]; then
-    FILE_PATH=$(echo "$TOOL_INFO" | jq -r '.tool_input.file_path // empty' 2>/dev/null || echo "")
-    if echo "$FILE_PATH" | grep -qiE 'config|dockerfile|workflow|\.yml|\.yaml|go\.mod|package\.json|requirements\.txt'; then
-        echo "[Contextify] 📂 Reading config/infra file. If you discover a pattern or decision, store_memory it."
+# Error resolution detector
+if [ "$TOOL_NAME" = "Bash" ]; then
+    ERROR_TEXT="$TOOL_INPUT $TOOL_OUTPUT"
+    if echo "$ERROR_TEXT" | grep -qiE '\b(error|failed|fatal)\b' && echo "$ERROR_TEXT" | grep -qiE '\b(fix|resolve|resolved)\b'; then
+        TITLE="AutoStore: error resolution detected"
+        CONTENT="High-confidence auto-store from error-resolution signal.
+- command: ${TOOL_INPUT}
+- output_excerpt: ${TOOL_OUTPUT}
+- confidence: 0.88
+- timestamp: $(date -u +%FT%TZ)"
+        auto_store_memory "$TITLE" "$CONTENT" "fix" "0.74" && echo "[Contextify] Auto-stored fix memory from error-resolution signal."
     fi
 fi
 
