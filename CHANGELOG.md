@@ -7,6 +7,9 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Documented repository merge policy in `CLAUDE.md`: use normal merge commits for PRs (no squash), then delete remote feature branches after merge.
+
 ## [0.7.0] - 2026-02-12
 
 ### Added

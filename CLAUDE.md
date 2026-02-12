@@ -17,6 +17,14 @@ When making a git commit, **always** update `CHANGELOG.md` before committing:
 
 3. Stage `CHANGELOG.md` together with the rest of the commit.
 
+## Merge Policy
+
+For this repository, PRs should use **normal merge commit** strategy.
+
+- Do not use squash merge.
+- Keep individual commits in history.
+- After merge, delete the remote feature branch.
+
 ### Release Preparation
 
 When the user requests a release (e.g. "release v0.5.0"), before triggering the workflow:
