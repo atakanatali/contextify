@@ -164,6 +164,33 @@ Services:
 - **MCP**: http://localhost:8420/mcp
 - **Health**: http://localhost:8420/health
 
+## Benchmark & SLO
+
+Run the recall benchmark suite (requires a running server on `localhost:8420`):
+
+```bash
+make bench-recall
+```
+
+The benchmark is an E2E test and is excluded from default `go test ./...` runs.
+It records latency distribution (`p50`, `p95`), hit-rate, and funnel deltas (`recall_attempts`, `recall_hits`, `store_opportunities`, `store_actions`) for the benchmark project.
+
+The benchmark uses these optional thresholds:
+
+- `RECALL_BENCH_MAX_P95_MS` (default: `2500`)
+- `RECALL_BENCH_MIN_HIT_RATE` (default: `0.80`)
+- `RECALL_BENCH_REPORT_PATH` (default: `artifacts/recall-benchmark-report.json`)
+
+Example:
+
+```bash
+RECALL_BENCH_MAX_P95_MS=1200 RECALL_BENCH_MIN_HIT_RATE=0.90 \
+RECALL_BENCH_REPORT_PATH=artifacts/local-recall-report.json \
+make bench-recall
+```
+
+In CI (`Backend CI` workflow), the benchmark report is uploaded as the `recall-benchmark-report` artifact.
+
 ## Manual Agent Setup
 
 If you prefer manual configuration:

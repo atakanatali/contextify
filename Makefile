@@ -1,7 +1,8 @@
 VERSION ?= dev
 LDFLAGS = -s -w -X main.version=$(VERSION)
+RECALL_BENCH_REPORT_PATH ?= artifacts/recall-benchmark-report.json
 
-.PHONY: build-server build-cli build-all clean
+.PHONY: build-server build-cli build-all clean bench-recall
 
 build-server:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/contextify-server ./cmd/server
@@ -13,6 +14,10 @@ build-all: build-server build-cli
 
 clean:
 	rm -rf bin/ dist/
+
+bench-recall:
+	@echo "Running recall benchmark (requires running server at localhost:8420)..."
+	RECALL_BENCH_REPORT_PATH=$(RECALL_BENCH_REPORT_PATH) go test -tags e2e ./tests/e2e -run TestRecallBenchmark -v -count=1
 
 .PHONY: release-cli
 release-cli:
