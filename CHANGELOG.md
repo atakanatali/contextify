@@ -7,6 +7,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-02-12
+
 ### Added
 - Telemetry foundation for recall/store funnel tracking:
   - Migration `004_telemetry.sql` with `memory_telemetry_events` table
