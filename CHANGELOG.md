@@ -7,7 +7,18 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Claude Desktop / Cowork MCP support via `npx mcp-remote` stdio bridge (`claude_desktop_config.json`)
+- Claude Chat (claude.ai) remote MCP setup guidance with manual connector instructions
+- New tool options in install wizard: `claude-desktop` and `claude-chat` (interactive menu items 2 and 3)
+- Go toolconfig: `internal/toolconfig/desktop.go` and `internal/toolconfig/chat.go`
+- Cross-platform Claude Desktop config path detection (macOS, Windows, Linux)
+- Auto-restart Claude Desktop after configuration
+
 ### Changed
+- Install wizard expanded from 4 to 6 tool options
+- `--tools` flag now accepts `claude-desktop` and `claude-chat`
+- `--all` flag includes all 6 tools
 - Documented repository merge policy in `CLAUDE.md`: use normal merge commits for PRs (no squash), then delete remote feature branches after merge.
 
 ## [0.7.0] - 2026-02-12

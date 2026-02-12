@@ -3,10 +3,12 @@ package toolconfig
 type ToolName string
 
 const (
-	ToolClaudeCode ToolName = "claude-code"
-	ToolCursor     ToolName = "cursor"
-	ToolWindsurf   ToolName = "windsurf"
-	ToolGemini     ToolName = "gemini"
+	ToolClaudeCode    ToolName = "claude-code"
+	ToolClaudeDesktop ToolName = "claude-desktop"
+	ToolClaudeChat    ToolName = "claude-chat"
+	ToolCursor        ToolName = "cursor"
+	ToolWindsurf      ToolName = "windsurf"
+	ToolGemini        ToolName = "gemini"
 )
 
 type ToolStatus string
@@ -25,6 +27,8 @@ type Tool struct {
 
 var AllTools = []Tool{
 	{Name: ToolClaudeCode, Label: "Claude Code"},
+	{Name: ToolClaudeDesktop, Label: "Claude Desktop / Cowork"},
+	{Name: ToolClaudeChat, Label: "Claude Chat (claude.ai)"},
 	{Name: ToolCursor, Label: "Cursor"},
 	{Name: ToolWindsurf, Label: "Windsurf"},
 	{Name: ToolGemini, Label: "Gemini"},

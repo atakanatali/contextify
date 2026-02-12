@@ -51,6 +51,14 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 	_ = toolconfig.UninstallClaudeCode()
 	printOK("Claude Code configuration removed.")
 
+	printStep("Removing Claude Desktop / Cowork configuration...")
+	_ = toolconfig.UninstallClaudeDesktop()
+	printOK("Claude Desktop configuration removed.")
+
+	printStep("Removing Claude Chat configuration...")
+	_ = toolconfig.UninstallClaudeChat()
+	printOK("Claude Chat configuration removed.")
+
 	printStep("Removing Cursor configuration...")
 	_ = toolconfig.UninstallCursor()
 	printOK("Cursor configuration removed.")

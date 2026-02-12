@@ -24,11 +24,11 @@ This command will:
   1. Pull the Docker image
   2. Start the Contextify container
   3. Wait for the system to be ready
-  4. Configure your AI tools (Claude Code, Cursor, Windsurf, Gemini)
+  4. Configure your AI tools (Claude Code, Claude Desktop/Cowork, Claude Chat, Cursor, Windsurf, Gemini)
   5. Run a self-test to verify everything works`,
 		RunE: runInstall,
 	}
-	cmd.Flags().StringSlice("tools", nil, "Tools to configure (claude-code,cursor,windsurf,gemini)")
+	cmd.Flags().StringSlice("tools", nil, "Tools to configure (claude-code,claude-desktop,claude-chat,cursor,windsurf,gemini)")
 	cmd.Flags().Bool("all", false, "Configure all detected tools")
 	cmd.Flags().Bool("no-test", false, "Skip self-test")
 	return cmd
@@ -228,6 +228,19 @@ func configureTool(tool toolconfig.ToolName, mcpURL string) error {
 	switch tool {
 	case toolconfig.ToolClaudeCode:
 		return toolconfig.ConfigureClaudeCode(mcpURL)
+	case toolconfig.ToolClaudeDesktop:
+		return toolconfig.ConfigureClaudeDesktop(mcpURL)
+	case toolconfig.ToolClaudeChat:
+		if err := toolconfig.ConfigureClaudeChat(mcpURL); err != nil {
+			return err
+		}
+		// Claude Chat requires manual setup via claude.ai UI
+		printInfo("Claude Chat requires manual setup:")
+		fmt.Println("    1. Go to https://claude.ai → Settings → Connectors")
+		fmt.Println("    2. Click 'Add custom connector'")
+		fmt.Printf("    3. Enter MCP URL: %s\n", mcpURL)
+		fmt.Println("    4. Enable the connector in each conversation via '+' → 'Connectors'")
+		return nil
 	case toolconfig.ToolCursor:
 		return toolconfig.ConfigureCursor(mcpURL)
 	case toolconfig.ToolWindsurf:

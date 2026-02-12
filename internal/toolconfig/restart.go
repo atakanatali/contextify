@@ -16,6 +16,11 @@ func RestartTool(tool ToolName) error {
 	case ToolClaudeCode:
 		// Claude Code has no programmatic restart; user must start a new session
 		return nil
+	case ToolClaudeDesktop:
+		return restartApp("Claude")
+	case ToolClaudeChat:
+		// Web-based, no restart needed
+		return nil
 	case ToolGemini:
 		// API-based, no restart needed
 		return nil
@@ -30,6 +35,8 @@ func IsToolRunning(tool ToolName) bool {
 		return isProcessRunning("Cursor")
 	case ToolWindsurf:
 		return isProcessRunning("Windsurf")
+	case ToolClaudeDesktop:
+		return isProcessRunning("Claude")
 	default:
 		return false
 	}
