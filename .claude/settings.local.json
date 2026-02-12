@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__contextify__get_context",
+      "mcp__contextify__recall_memories",
+      "Bash(go build:*)",
+      "Bash(npm run build:*)",
+      "Bash(npx vite build)",
+      "Bash(npm install:*)",
+      "Bash(go vet:*)",
+      "Bash(go test:*)",
+      "mcp__contextify__store_memory",
+      "Bash(curl:*)",
+      "Bash(docker ps:*)",
+      "Bash(python3:*)",
+      "mcp__contextify__search_memories",
+      "Bash(git config:*)",
+      "Bash(bash:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(git fetch:*)",
+      "Bash(git merge:*)"
+    ]
+  }
+}

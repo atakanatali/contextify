@@ -8,6 +8,34 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+
+#### Memory Consolidation & Deduplication
+- **Smart Store** — `store_memory` now auto-detects duplicates on write
+  - Similarity >= 0.92: automatic merge (configurable)
+  - Similarity 0.75-0.92: creates a pending suggestion for review
+  - `Store()` returns `StoreResult` with `action` (stored/merged) and `suggestions` fields
+- **Merge strategies**: `latest_wins`, `append`, `smart_merge` (default)
+- **Background dedup scanner** — periodic scan of all memories for duplicates
+- **Consolidation suggestions** — pending merge suggestions reviewable via Web UI or API
+- **Consolidation audit log** — every merge operation is recorded with before/after content
+- **SUPERSEDES relationship** — surviving memory links to absorbed memory
+- 3 new MCP tools: `consolidate_memories`, `find_similar`, `suggest_consolidations`
+- 7 new REST endpoints: merge, duplicates, batch consolidate, suggestions CRUD, consolidation log
+- Database migration `002_consolidation.sql`: `consolidation_log` table, `consolidation_suggestions` table, `version`/`merged_from`/`replaced_by` columns on memories
+- Web UI Consolidation page for reviewing and acting on suggestions
+
+#### Project ID Normalization
+- **VCS-agnostic canonical project names** — worktrees, different machines, renames all resolve to the same identity
+- **File-based VCS detection** — `.git/config` and `.hg/hgrc` parsed directly (no git/hg binary needed, works in Docker sandbox)
+- **Normalization priority**: `.contextify.yml` name > VCS remote URL > worktree suffix strip > raw path
+- **Hybrid architecture**: client-side hook + server-side safety net + background worker
+- Server normalizes `project_id` on both reads and writes for consistency
+- Background `ProjectNormalizerJob` (hourly) re-normalizes legacy project_ids
+- Admin endpoint `POST /admin/normalize-projects` for manual trigger
+- Database migration `003_normalize_project_ids.sql`: strips worktree suffixes from existing data
+- `NormalizeProjectID` config toggle (default: true, env: `NORMALIZE_PROJECT_ID`)
+- Session-start hook rewritten with full VCS-agnostic normalization in bash
+- `ProjectNormalizer` with `sync.Map` cache for zero-cost repeated lookups
 - Post-tool-use hook state machine — enforces `store_memory` after every `git commit` with violation nagging
 - `contextify update` and `install.sh --update` now force-overwrite tool configs (hooks, prompts, rules) with latest versions
 - `UpdateConfiguredTools()` function for centralized tool config updates
@@ -42,8 +70,10 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Claude Code CLAUDE.md prompt block upgraded to mandatory protocol (matching hook enforcement level)
 
 ### Changed
+- `Store()` now returns `*StoreResult` (not `*Memory`) — includes `action` and `suggestions`
 - `install.sh` no longer auto-detects and silently configures all tools
 - Gemini configuration is now an explicit selection (not always copied)
+- MCP server instructions updated to reflect auto-normalization
 - Release workflow generates notes from CHANGELOG.md instead of hardcoded body
 - CHANGELOG.md updates are now developer-driven (via CLAUDE.md rule) instead of automated in CI
 

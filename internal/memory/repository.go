@@ -39,7 +39,8 @@ func (r *Repository) Store(ctx context.Context, mem *Memory) error {
 func (r *Repository) Get(ctx context.Context, id uuid.UUID) (*Memory, error) {
 	query := `
 		SELECT id, title, content, summary, embedding, type, scope, project_id, agent_source,
-		       tags, importance, ttl_seconds, access_count, created_at, updated_at, expires_at
+		       tags, importance, ttl_seconds, access_count, created_at, updated_at, expires_at,
+		       version, merged_from, replaced_by
 		FROM memories WHERE id = $1
 	`
 	mem := &Memory{}
@@ -48,6 +49,7 @@ func (r *Repository) Get(ctx context.Context, id uuid.UUID) (*Memory, error) {
 		&mem.Type, &mem.Scope, &mem.ProjectID, &mem.AgentSource,
 		&mem.Tags, &mem.Importance, &mem.TTLSeconds, &mem.AccessCount,
 		&mem.CreatedAt, &mem.UpdatedAt, &mem.ExpiresAt,
+		&mem.Version, &mem.MergedFrom, &mem.ReplacedBy,
 	)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -121,7 +123,7 @@ func (r *Repository) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// HybridSearch performs combined vector + keyword search.
+// HybridSearch performs combined vector + keyword search, excluding replaced memories.
 func (r *Repository) HybridSearch(ctx context.Context, queryEmbedding pgvector.Vector, req SearchRequest, vectorWeight, keywordWeight float64) ([]SearchResult, error) {
 	conditions := []string{}
 	args := []any{queryEmbedding}
@@ -158,9 +160,9 @@ func (r *Repository) HybridSearch(ctx context.Context, queryEmbedding pgvector.V
 		argIdx++
 	}
 
-	// Exclude expired memories
+	// Exclude expired and replaced memories
 	conditions = append(conditions, "(m.expires_at IS NULL OR m.expires_at > NOW())")
-	// Require embedding to exist for vector search
+	conditions = append(conditions, "m.replaced_by IS NULL")
 	conditions = append(conditions, "m.embedding IS NOT NULL")
 
 	whereClause := ""
@@ -333,7 +335,7 @@ func (r *Repository) GetRelated(ctx context.Context, memoryID uuid.UUID, relatio
 	return memories, relationships, rows.Err()
 }
 
-// GetStats returns memory statistics.
+// GetStats returns memory statistics, excluding replaced memories from active counts.
 func (r *Repository) GetStats(ctx context.Context) (*Stats, error) {
 	stats := &Stats{
 		ByType:  make(map[string]int),
@@ -341,14 +343,14 @@ func (r *Repository) GetStats(ctx context.Context) (*Stats, error) {
 		ByAgent: make(map[string]int),
 	}
 
-	// Total count
-	err := r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM memories").Scan(&stats.TotalMemories)
+	// Total active count (exclude replaced)
+	err := r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE replaced_by IS NULL").Scan(&stats.TotalMemories)
 	if err != nil {
 		return nil, fmt.Errorf("count memories: %w", err)
 	}
 
 	// By type
-	rows, err := r.pool.Query(ctx, "SELECT type, COUNT(*) FROM memories GROUP BY type")
+	rows, err := r.pool.Query(ctx, "SELECT type, COUNT(*) FROM memories WHERE replaced_by IS NULL GROUP BY type")
 	if err != nil {
 		return nil, fmt.Errorf("count by type: %w", err)
 	}
@@ -361,7 +363,7 @@ func (r *Repository) GetStats(ctx context.Context) (*Stats, error) {
 	rows.Close()
 
 	// By scope
-	rows, err = r.pool.Query(ctx, "SELECT scope, COUNT(*) FROM memories GROUP BY scope")
+	rows, err = r.pool.Query(ctx, "SELECT scope, COUNT(*) FROM memories WHERE replaced_by IS NULL GROUP BY scope")
 	if err != nil {
 		return nil, fmt.Errorf("count by scope: %w", err)
 	}
@@ -374,7 +376,7 @@ func (r *Repository) GetStats(ctx context.Context) (*Stats, error) {
 	rows.Close()
 
 	// By agent
-	rows, err = r.pool.Query(ctx, "SELECT COALESCE(agent_source, 'unknown'), COUNT(*) FROM memories GROUP BY agent_source")
+	rows, err = r.pool.Query(ctx, "SELECT COALESCE(agent_source, 'unknown'), COUNT(*) FROM memories WHERE replaced_by IS NULL GROUP BY agent_source")
 	if err != nil {
 		return nil, fmt.Errorf("count by agent: %w", err)
 	}
@@ -387,16 +389,19 @@ func (r *Repository) GetStats(ctx context.Context) (*Stats, error) {
 	rows.Close()
 
 	// Long-term vs short-term
-	r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE ttl_seconds IS NULL").Scan(&stats.LongTermCount)
-	r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE ttl_seconds IS NOT NULL").Scan(&stats.ShortTermCount)
+	r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE ttl_seconds IS NULL AND replaced_by IS NULL").Scan(&stats.LongTermCount)
+	r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE ttl_seconds IS NOT NULL AND replaced_by IS NULL").Scan(&stats.ShortTermCount)
 
 	// Expiring soon (next hour)
-	r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE expires_at IS NOT NULL AND expires_at < NOW() + INTERVAL '1 hour'").Scan(&stats.ExpiringCount)
+	r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE expires_at IS NOT NULL AND expires_at < NOW() + INTERVAL '1 hour' AND replaced_by IS NULL").Scan(&stats.ExpiringCount)
+
+	// Pending consolidation suggestions
+	r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM consolidation_suggestions WHERE status = 'pending'").Scan(&stats.PendingSuggestions)
 
 	return stats, nil
 }
 
-// ListByProject returns all important memories for a given project.
+// ListByProject returns all important memories for a given project, excluding replaced.
 func (r *Repository) ListByProject(ctx context.Context, projectID string, limit int) ([]Memory, error) {
 	if limit <= 0 {
 		limit = 50
@@ -407,6 +412,7 @@ func (r *Repository) ListByProject(ctx context.Context, projectID string, limit 
 		FROM memories
 		WHERE (project_id = $1 OR scope = 'global')
 		  AND (expires_at IS NULL OR expires_at > NOW())
+		  AND replaced_by IS NULL
 		ORDER BY importance DESC, updated_at DESC
 		LIMIT $2
 	`
@@ -431,6 +437,388 @@ func (r *Repository) ListByProject(ctx context.Context, projectID string, limit 
 	}
 
 	return memories, rows.Err()
+}
+
+// --- Consolidation repository methods ---
+
+// FindSimilar finds memories with embedding similarity above a threshold.
+func (r *Repository) FindSimilar(ctx context.Context, embedding pgvector.Vector, projectID *string, threshold float64, limit int) ([]SimilarMemory, error) {
+	conditions := []string{
+		"m.replaced_by IS NULL",
+		"m.embedding IS NOT NULL",
+		"(m.expires_at IS NULL OR m.expires_at > NOW())",
+		fmt.Sprintf("1 - (m.embedding <=> $1) >= $%d", 2),
+	}
+	args := []any{embedding, threshold}
+	argIdx := 3
+
+	if projectID != nil {
+		conditions = append(conditions, fmt.Sprintf("(m.project_id = $%d OR m.scope = 'global')", argIdx))
+		args = append(args, *projectID)
+		argIdx++
+	}
+
+	if limit <= 0 {
+		limit = 5
+	}
+	args = append(args, limit)
+
+	query := fmt.Sprintf(`
+		SELECT m.id, m.title, m.content, m.summary, m.type, m.scope, m.project_id,
+		       m.agent_source, m.tags, m.importance, m.ttl_seconds, m.access_count,
+		       m.created_at, m.updated_at, m.expires_at,
+		       1 - (m.embedding <=> $1) AS similarity
+		FROM memories m
+		WHERE %s
+		ORDER BY similarity DESC
+		LIMIT $%d
+	`, strings.Join(conditions, " AND "), argIdx)
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("find similar: %w", err)
+	}
+	defer rows.Close()
+
+	var results []SimilarMemory
+	for rows.Next() {
+		var sm SimilarMemory
+		err := rows.Scan(
+			&sm.Memory.ID, &sm.Memory.Title, &sm.Memory.Content, &sm.Memory.Summary,
+			&sm.Memory.Type, &sm.Memory.Scope, &sm.Memory.ProjectID,
+			&sm.Memory.AgentSource, &sm.Memory.Tags, &sm.Memory.Importance,
+			&sm.Memory.TTLSeconds, &sm.Memory.AccessCount,
+			&sm.Memory.CreatedAt, &sm.Memory.UpdatedAt, &sm.Memory.ExpiresAt,
+			&sm.Similarity,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan similar memory: %w", err)
+		}
+		results = append(results, sm)
+	}
+
+	return results, rows.Err()
+}
+
+// MarkReplaced sets replaced_by on a memory, soft-deleting it.
+func (r *Repository) MarkReplaced(ctx context.Context, sourceID, targetID uuid.UUID) error {
+	_, err := r.pool.Exec(ctx,
+		"UPDATE memories SET replaced_by = $2 WHERE id = $1 AND replaced_by IS NULL",
+		sourceID, targetID,
+	)
+	if err != nil {
+		return fmt.Errorf("mark replaced: %w", err)
+	}
+	return nil
+}
+
+// UpdateMergeFields updates version, merged_from, and re-embeds a merged memory.
+func (r *Repository) UpdateMergeFields(ctx context.Context, id uuid.UUID, title, content string, tags []string, importance float32, mergedFrom []uuid.UUID, newEmbedding *pgvector.Vector) error {
+	query := `
+		UPDATE memories
+		SET title = $2, content = $3, tags = $4, importance = $5,
+		    merged_from = $6, version = version + 1, embedding = $7
+		WHERE id = $1
+	`
+	_, err := r.pool.Exec(ctx, query, id, title, content, tags, importance, mergedFrom, newEmbedding)
+	if err != nil {
+		return fmt.Errorf("update merge fields: %w", err)
+	}
+	return nil
+}
+
+// CleanupReplaced hard-deletes memories that were replaced longer than retention ago.
+func (r *Repository) CleanupReplaced(ctx context.Context, retention time.Duration) (int64, error) {
+	query := `
+		DELETE FROM memories
+		WHERE replaced_by IS NOT NULL
+		  AND updated_at < NOW() - $1::INTERVAL
+	`
+	result, err := r.pool.Exec(ctx, query, fmt.Sprintf("%d seconds", int(retention.Seconds())))
+	if err != nil {
+		return 0, fmt.Errorf("cleanup replaced: %w", err)
+	}
+	return result.RowsAffected(), nil
+}
+
+// StoreSuggestion inserts a consolidation suggestion, ignoring duplicates.
+func (r *Repository) StoreSuggestion(ctx context.Context, memAID, memBID uuid.UUID, similarity float64, projectID *string) error {
+	// Normalize order to avoid duplicates (smaller UUID first)
+	a, b := memAID, memBID
+	if a.String() > b.String() {
+		a, b = b, a
+	}
+	query := `
+		INSERT INTO consolidation_suggestions (memory_a_id, memory_b_id, similarity, project_id)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (memory_a_id, memory_b_id) DO UPDATE SET similarity = GREATEST(consolidation_suggestions.similarity, $3)
+	`
+	_, err := r.pool.Exec(ctx, query, a, b, similarity, projectID)
+	if err != nil {
+		return fmt.Errorf("store suggestion: %w", err)
+	}
+	return nil
+}
+
+// GetSuggestions returns consolidation suggestions with their associated memories.
+func (r *Repository) GetSuggestions(ctx context.Context, projectID *string, status string, limit, offset int) ([]ConsolidationSuggestion, int, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if status == "" {
+		status = "pending"
+	}
+
+	conditions := []string{"s.status = $1"}
+	args := []any{status}
+	argIdx := 2
+
+	if projectID != nil {
+		conditions = append(conditions, fmt.Sprintf("s.project_id = $%d", argIdx))
+		args = append(args, *projectID)
+		argIdx++
+	}
+
+	where := strings.Join(conditions, " AND ")
+
+	// Count total
+	var total int
+	countArgs := make([]any, len(args))
+	copy(countArgs, args)
+	err := r.pool.QueryRow(ctx, fmt.Sprintf("SELECT COUNT(*) FROM consolidation_suggestions s WHERE %s", where), countArgs...).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count suggestions: %w", err)
+	}
+
+	args = append(args, limit, offset)
+	query := fmt.Sprintf(`
+		SELECT s.id, s.memory_a_id, s.memory_b_id, s.similarity, s.status, s.project_id, s.created_at, s.resolved_at,
+		       a.id, a.title, a.content, a.summary, a.type, a.scope, a.project_id, a.agent_source, a.tags, a.importance, a.ttl_seconds, a.access_count, a.created_at, a.updated_at, a.expires_at,
+		       b.id, b.title, b.content, b.summary, b.type, b.scope, b.project_id, b.agent_source, b.tags, b.importance, b.ttl_seconds, b.access_count, b.created_at, b.updated_at, b.expires_at
+		FROM consolidation_suggestions s
+		JOIN memories a ON a.id = s.memory_a_id
+		JOIN memories b ON b.id = s.memory_b_id
+		WHERE %s
+		ORDER BY s.similarity DESC
+		LIMIT $%d OFFSET $%d
+	`, where, argIdx, argIdx+1)
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("get suggestions: %w", err)
+	}
+	defer rows.Close()
+
+	var suggestions []ConsolidationSuggestion
+	for rows.Next() {
+		var s ConsolidationSuggestion
+		var a, b Memory
+		err := rows.Scan(
+			&s.ID, &s.MemoryAID, &s.MemoryBID, &s.Similarity, &s.Status, &s.ProjectID, &s.CreatedAt, &s.ResolvedAt,
+			&a.ID, &a.Title, &a.Content, &a.Summary, &a.Type, &a.Scope, &a.ProjectID, &a.AgentSource, &a.Tags, &a.Importance, &a.TTLSeconds, &a.AccessCount, &a.CreatedAt, &a.UpdatedAt, &a.ExpiresAt,
+			&b.ID, &b.Title, &b.Content, &b.Summary, &b.Type, &b.Scope, &b.ProjectID, &b.AgentSource, &b.Tags, &b.Importance, &b.TTLSeconds, &b.AccessCount, &b.CreatedAt, &b.UpdatedAt, &b.ExpiresAt,
+		)
+		if err != nil {
+			return nil, 0, fmt.Errorf("scan suggestion: %w", err)
+		}
+		s.MemoryA = &a
+		s.MemoryB = &b
+		suggestions = append(suggestions, s)
+	}
+
+	return suggestions, total, rows.Err()
+}
+
+// UpdateSuggestionStatus updates a suggestion's status to accepted or dismissed.
+func (r *Repository) UpdateSuggestionStatus(ctx context.Context, id uuid.UUID, status string) error {
+	_, err := r.pool.Exec(ctx,
+		"UPDATE consolidation_suggestions SET status = $2, resolved_at = NOW() WHERE id = $1",
+		id, status,
+	)
+	if err != nil {
+		return fmt.Errorf("update suggestion status: %w", err)
+	}
+	return nil
+}
+
+// StoreConsolidationLog records a merge operation.
+func (r *Repository) StoreConsolidationLog(ctx context.Context, log *ConsolidationLog) error {
+	query := `
+		INSERT INTO consolidation_log (id, target_id, source_ids, merge_strategy, similarity_score, content_before, content_after, performed_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`
+	_, err := r.pool.Exec(ctx, query,
+		log.ID, log.TargetID, log.SourceIDs, log.MergeStrategy,
+		log.SimilarityScore, log.ContentBefore, log.ContentAfter, log.PerformedBy,
+	)
+	if err != nil {
+		return fmt.Errorf("store consolidation log: %w", err)
+	}
+	return nil
+}
+
+// GetConsolidationLog returns consolidation log entries.
+func (r *Repository) GetConsolidationLog(ctx context.Context, targetID *uuid.UUID, limit, offset int) ([]ConsolidationLog, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	conditions := []string{}
+	args := []any{}
+	argIdx := 1
+
+	if targetID != nil {
+		conditions = append(conditions, fmt.Sprintf("target_id = $%d", argIdx))
+		args = append(args, *targetID)
+		argIdx++
+	}
+
+	where := ""
+	if len(conditions) > 0 {
+		where = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	args = append(args, limit, offset)
+	query := fmt.Sprintf(`
+		SELECT id, target_id, source_ids, merge_strategy, similarity_score, content_before, content_after, performed_by, created_at
+		FROM consolidation_log
+		%s
+		ORDER BY created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, where, argIdx, argIdx+1)
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("get consolidation log: %w", err)
+	}
+	defer rows.Close()
+
+	var logs []ConsolidationLog
+	for rows.Next() {
+		var l ConsolidationLog
+		err := rows.Scan(
+			&l.ID, &l.TargetID, &l.SourceIDs, &l.MergeStrategy,
+			&l.SimilarityScore, &l.ContentBefore, &l.ContentAfter, &l.PerformedBy, &l.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan consolidation log: %w", err)
+		}
+		logs = append(logs, l)
+	}
+
+	return logs, rows.Err()
+}
+
+// ScanDuplicates finds memory pairs with high vector similarity for a project.
+func (r *Repository) ScanDuplicates(ctx context.Context, threshold float64, batchSize int) ([]struct {
+	MemAID     uuid.UUID
+	MemBID     uuid.UUID
+	Similarity float64
+	ProjectID  *string
+}, error) {
+	if batchSize <= 0 {
+		batchSize = 100
+	}
+	query := `
+		SELECT m1.id, m2.id, 1 - (m1.embedding <=> m2.embedding) AS similarity, m1.project_id
+		FROM memories m1
+		CROSS JOIN LATERAL (
+			SELECT m2.id, m2.embedding
+			FROM memories m2
+			WHERE m2.id > m1.id
+			  AND m2.replaced_by IS NULL
+			  AND m2.embedding IS NOT NULL
+			  AND (m2.expires_at IS NULL OR m2.expires_at > NOW())
+			  AND (m2.project_id = m1.project_id OR (m2.project_id IS NULL AND m1.project_id IS NULL))
+			  AND 1 - (m2.embedding <=> m1.embedding) >= $1
+			ORDER BY m2.embedding <=> m1.embedding
+			LIMIT 3
+		) m2
+		WHERE m1.replaced_by IS NULL
+		  AND m1.embedding IS NOT NULL
+		  AND (m1.expires_at IS NULL OR m1.expires_at > NOW())
+		LIMIT $2
+	`
+
+	rows, err := r.pool.Query(ctx, query, threshold, batchSize)
+	if err != nil {
+		return nil, fmt.Errorf("scan duplicates: %w", err)
+	}
+	defer rows.Close()
+
+	type pair struct {
+		MemAID     uuid.UUID
+		MemBID     uuid.UUID
+		Similarity float64
+		ProjectID  *string
+	}
+	var pairs []pair
+	for rows.Next() {
+		var p pair
+		if err := rows.Scan(&p.MemAID, &p.MemBID, &p.Similarity, &p.ProjectID); err != nil {
+			return nil, fmt.Errorf("scan duplicate pair: %w", err)
+		}
+		pairs = append(pairs, p)
+	}
+
+	// Convert to return type
+	result := make([]struct {
+		MemAID     uuid.UUID
+		MemBID     uuid.UUID
+		Similarity float64
+		ProjectID  *string
+	}, len(pairs))
+	for i, p := range pairs {
+		result[i] = struct {
+			MemAID     uuid.UUID
+			MemBID     uuid.UUID
+			Similarity float64
+			ProjectID  *string
+		}(p)
+	}
+
+	return result, rows.Err()
+}
+
+// ListDistinctProjectIDs returns all unique non-null project_id values from the memories table.
+func (r *Repository) ListDistinctProjectIDs(ctx context.Context) ([]string, error) {
+	query := `SELECT DISTINCT project_id FROM memories WHERE project_id IS NOT NULL AND project_id != '' ORDER BY project_id`
+	rows, err := r.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("list distinct project ids: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan project id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// UpdateProjectID updates all memories and consolidation_suggestions with oldID to newID.
+func (r *Repository) UpdateProjectID(ctx context.Context, oldID, newID string) (int, error) {
+	total := 0
+
+	// Update memories
+	tag, err := r.pool.Exec(ctx, `UPDATE memories SET project_id = $1 WHERE project_id = $2`, newID, oldID)
+	if err != nil {
+		return 0, fmt.Errorf("update memories project_id: %w", err)
+	}
+	total += int(tag.RowsAffected())
+
+	// Update consolidation_suggestions
+	tag, err = r.pool.Exec(ctx, `UPDATE consolidation_suggestions SET project_id = $1 WHERE project_id = $2`, newID, oldID)
+	if err != nil {
+		return total, fmt.Errorf("update suggestions project_id: %w", err)
+	}
+	total += int(tag.RowsAffected())
+
+	return total, nil
 }
 
 // GetAnalytics returns analytics data for the dashboard.

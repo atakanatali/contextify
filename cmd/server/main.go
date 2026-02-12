@@ -68,6 +68,20 @@ func main() {
 	cleanup.Start()
 	defer cleanup.Stop()
 
+	// Start dedup scanner (if consolidation enabled)
+	if cfg.Memory.Consolidation.Enabled {
+		dedupScanner := scheduler.NewDedupScanner(svc, cfg.Memory.Consolidation.ScanInterval)
+		dedupScanner.Start()
+		defer dedupScanner.Stop()
+	}
+
+	// Start project_id normalizer background job
+	if cfg.Memory.NormalizeProjectID {
+		normalizerJob := scheduler.NewProjectNormalizerJob(svc, 1*time.Hour)
+		normalizerJob.Start()
+		defer normalizerJob.Stop()
+	}
+
 	// Create MCP server
 	mcpServer := mcp.NewServer(svc)
 

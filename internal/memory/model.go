@@ -54,22 +54,25 @@ const (
 )
 
 type Memory struct {
-	ID          uuid.UUID       `json:"id"`
-	Title       string          `json:"title"`
-	Content     string          `json:"content"`
-	Summary     *string         `json:"summary,omitempty"`
+	ID          uuid.UUID        `json:"id"`
+	Title       string           `json:"title"`
+	Content     string           `json:"content"`
+	Summary     *string          `json:"summary,omitempty"`
 	Embedding   *pgvector.Vector `json:"-"`
-	Type        MemoryType      `json:"type"`
-	Scope       MemoryScope     `json:"scope"`
-	ProjectID   *string         `json:"project_id,omitempty"`
-	AgentSource *string         `json:"agent_source,omitempty"`
-	Tags        []string        `json:"tags"`
-	Importance  float32         `json:"importance"`
-	TTLSeconds  *int            `json:"ttl_seconds,omitempty"`
-	AccessCount int             `json:"access_count"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-	ExpiresAt   *time.Time      `json:"expires_at,omitempty"`
+	Type        MemoryType       `json:"type"`
+	Scope       MemoryScope      `json:"scope"`
+	ProjectID   *string          `json:"project_id,omitempty"`
+	AgentSource *string          `json:"agent_source,omitempty"`
+	Tags        []string         `json:"tags"`
+	Importance  float32          `json:"importance"`
+	TTLSeconds  *int             `json:"ttl_seconds,omitempty"`
+	AccessCount int              `json:"access_count"`
+	CreatedAt   time.Time        `json:"created_at"`
+	UpdatedAt   time.Time        `json:"updated_at"`
+	ExpiresAt   *time.Time       `json:"expires_at,omitempty"`
+	Version     int              `json:"version"`
+	MergedFrom  []uuid.UUID      `json:"merged_from,omitempty"`
+	ReplacedBy  *uuid.UUID       `json:"replaced_by,omitempty"`
 }
 
 type Relationship struct {
@@ -131,13 +134,14 @@ type RelationshipRequest struct {
 }
 
 type Stats struct {
-	TotalMemories  int            `json:"total_memories"`
-	ByType         map[string]int `json:"by_type"`
-	ByScope        map[string]int `json:"by_scope"`
-	ByAgent        map[string]int `json:"by_agent"`
-	LongTermCount  int            `json:"long_term_count"`
-	ShortTermCount int            `json:"short_term_count"`
-	ExpiringCount  int            `json:"expiring_count"`
+	TotalMemories      int            `json:"total_memories"`
+	ByType             map[string]int `json:"by_type"`
+	ByScope            map[string]int `json:"by_scope"`
+	ByAgent            map[string]int `json:"by_agent"`
+	LongTermCount      int            `json:"long_term_count"`
+	ShortTermCount     int            `json:"short_term_count"`
+	ExpiringCount      int            `json:"expiring_count"`
+	PendingSuggestions int            `json:"pending_suggestions"`
 }
 
 type AnalyticsData struct {
@@ -163,4 +167,69 @@ type TimelineEntry struct {
 	Date    string `json:"date"`
 	Created int    `json:"created"`
 	Hits    int    `json:"hits"`
+}
+
+// StoreResult is returned by Store() with dedup information.
+type StoreResult struct {
+	Memory          *Memory         `json:"memory"`
+	Action          string          `json:"action"` // "created", "updated", "created_with_suggestions"
+	UpdatedExisting *Memory         `json:"updated_existing,omitempty"`
+	Suggestions     []SimilarMemory `json:"suggestions,omitempty"`
+}
+
+// SimilarMemory pairs a memory with its similarity score.
+type SimilarMemory struct {
+	Memory     Memory  `json:"memory"`
+	Similarity float64 `json:"similarity"`
+}
+
+// ConsolidationLog records a merge operation for audit.
+type ConsolidationLog struct {
+	ID              uuid.UUID   `json:"id"`
+	TargetID        uuid.UUID   `json:"target_id"`
+	SourceIDs       []uuid.UUID `json:"source_ids"`
+	MergeStrategy   string      `json:"merge_strategy"`
+	SimilarityScore *float64    `json:"similarity_score,omitempty"`
+	ContentBefore   string      `json:"content_before"`
+	ContentAfter    string      `json:"content_after"`
+	PerformedBy     string      `json:"performed_by"`
+	CreatedAt       time.Time   `json:"created_at"`
+}
+
+// ConsolidationSuggestion represents a pair of memories that may be duplicates.
+type ConsolidationSuggestion struct {
+	ID         uuid.UUID  `json:"id"`
+	MemoryAID  uuid.UUID  `json:"memory_a_id"`
+	MemoryBID  uuid.UUID  `json:"memory_b_id"`
+	Similarity float64    `json:"similarity"`
+	Status     string     `json:"status"` // "pending", "accepted", "dismissed"
+	ProjectID  *string    `json:"project_id,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	// Populated when fetching with memories
+	MemoryA *Memory `json:"memory_a,omitempty"`
+	MemoryB *Memory `json:"memory_b,omitempty"`
+}
+
+// MergeRequest is the API request for merging memories.
+type MergeRequest struct {
+	SourceIDs []uuid.UUID `json:"source_ids"`
+	Strategy  string      `json:"strategy,omitempty"`
+}
+
+// BatchConsolidateRequest is the API request for batch merge.
+type BatchConsolidateRequest struct {
+	Operations []BatchMergeOp `json:"operations"`
+	Strategy   string         `json:"strategy,omitempty"`
+}
+
+// BatchMergeOp represents one merge operation in a batch.
+type BatchMergeOp struct {
+	TargetID  uuid.UUID   `json:"target_id"`
+	SourceIDs []uuid.UUID `json:"source_ids"`
+}
+
+// SuggestionStatusUpdate is the API request for updating suggestion status.
+type SuggestionStatusUpdate struct {
+	Status string `json:"status"` // "accepted", "dismissed"
 }

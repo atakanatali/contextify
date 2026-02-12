@@ -5,6 +5,7 @@ const navItems = [
   { to: '/', label: 'Dashboard', icon: '🧠' },
   { to: '/memories', label: 'Memories', icon: '📁' },
   { to: '/search', label: 'Search', icon: '🔍' },
+  { to: '/consolidation', label: 'Consolidation', icon: '🔗' },
   { to: '/analytics', label: 'Analytics', icon: '📊' },
 ]
 

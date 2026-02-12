@@ -21,6 +21,13 @@
 
 Unified memory system for AI agents. Provides shared short-term and long-term memory across Claude Code, Cursor, Windsurf, Gemini, and any other AI tool.
 
+**Key features:**
+- **Smart Store** — automatic deduplication with similarity-based merge (>= 0.92 auto-merge, 0.75-0.92 suggest)
+- **Project ID Normalization** — VCS-agnostic canonical names (worktrees, different machines, renames all resolve to the same identity)
+- **Semantic + Keyword Search** — hybrid search with pgvector HNSW + full-text (70/30 weighting)
+- **Memory Consolidation** — merge strategies (latest_wins, append, smart_merge), background dedup scanner, Web UI review
+- **Multi-Agent** — MCP for Claude Code/Cursor/Windsurf, REST API for Gemini and others
+
 <img width="3004" height="1437" alt="image" src="https://github.com/user-attachments/assets/939ef56d-9fcc-4c8b-a85b-29f9de4256e5" />
 
 ## Core Architecture
@@ -39,6 +46,8 @@ graph TB
         REST[REST API]
         WEB[Web UI]
         SVC[Memory Service]
+        NORM[Project Normalizer]
+        DEDUP[Dedup Scanner]
     end
 
     subgraph Storage["Data Layer"]
@@ -50,13 +59,17 @@ graph TB
     GE -->|REST| REST
     WEB -.-> REST
     MCP & REST --> SVC
+    SVC --> NORM
     SVC --> PG & OL
+    DEDUP -->|periodic| SVC
 
     style MCP fill:#4f46e5,color:#fff
     style REST fill:#059669,color:#fff
     style WEB fill:#d97706,color:#fff
     style PG fill:#2563eb,color:#fff
     style OL fill:#7c3aed,color:#fff
+    style NORM fill:#0891b2,color:#fff
+    style DEDUP fill:#6b7280,color:#fff
 ```
 
 > For detailed technical documentation, see [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -213,7 +226,7 @@ Memory API: http://localhost:8420/api/v1/
 
 | Tool | Description |
 |------|-------------|
-| `store_memory` | Store a new memory (auto-embeds) |
+| `store_memory` | Store a new memory (auto-embeds, auto-dedup) |
 | `recall_memories` | Semantic search with natural language |
 | `search_memories` | Advanced search with filters |
 | `get_memory` | Get memory by ID |
@@ -223,21 +236,33 @@ Memory API: http://localhost:8420/api/v1/
 | `get_related_memories` | Find connected memories |
 | `get_context` | Load all project memories (session start) |
 | `promote_memory` | Promote short-term to permanent |
+| `consolidate_memories` | Merge duplicate memories with strategy |
+| `find_similar` | Find similar memories by content |
+| `suggest_consolidations` | Get pending merge suggestions |
 
 ## REST API
 
 ```
-POST   /api/v1/memories            Store memory
-GET    /api/v1/memories/:id         Get memory
-PUT    /api/v1/memories/:id         Update memory
-DELETE /api/v1/memories/:id         Delete memory
-POST   /api/v1/memories/search      Search
-POST   /api/v1/memories/recall      Semantic recall
-POST   /api/v1/memories/:id/promote Promote to long-term
-GET    /api/v1/memories/:id/related Get related memories
-POST   /api/v1/relationships        Create relationship
-GET    /api/v1/stats                Stats
-POST   /api/v1/context/:project     Get project context
+POST   /api/v1/memories              Store memory (Smart Store with dedup)
+GET    /api/v1/memories/:id           Get memory
+PUT    /api/v1/memories/:id           Update memory
+DELETE /api/v1/memories/:id           Delete memory
+POST   /api/v1/memories/search        Search
+POST   /api/v1/memories/recall        Semantic recall
+POST   /api/v1/memories/:id/promote   Promote to long-term
+POST   /api/v1/memories/:id/merge     Merge two memories
+GET    /api/v1/memories/:id/related   Get related memories
+GET    /api/v1/memories/duplicates    Find duplicate memories
+POST   /api/v1/memories/consolidate   Batch consolidation
+POST   /api/v1/relationships          Create relationship
+GET    /api/v1/stats                  Stats
+POST   /api/v1/context/:project       Get project context
+
+GET    /api/v1/consolidation/suggestions      Pending merge suggestions
+PUT    /api/v1/consolidation/suggestions/:id  Accept/reject suggestion
+GET    /api/v1/consolidation/log              Consolidation audit log
+
+POST   /api/v1/admin/normalize-projects       Trigger project ID normalization
 ```
 
 ## Memory Model
@@ -249,6 +274,37 @@ Each memory has:
 - **TTL**: automatic expiry with access-based extension
 - **tags**: array for filtering
 - **embedding**: auto-generated via Ollama (nomic-embed-text, 768d)
+- **version**: increments on merge (consolidation tracking)
+- **merged_from**: UUID array of source memories absorbed during merge
+
+## Smart Store (Deduplication)
+
+When storing a memory, the server automatically checks for similar existing content:
+
+| Similarity | Action |
+|-----------|--------|
+| >= 0.92 | **Auto-merge** — content is merged into the existing memory |
+| 0.75 - 0.92 | **Suggest** — creates a pending suggestion for human/agent review |
+| < 0.75 | **Normal store** — stored as a new memory |
+
+Merge strategies: `latest_wins` (replace), `append` (concatenate), `smart_merge` (intelligent blend, default).
+
+## Project ID Normalization
+
+Agents send their working directory as `project_id`. The server automatically normalizes it to a canonical name:
+
+```
+/Users/alice/repos/myapp/.claude/worktrees/feature-x
+→ github.com/alice/myapp
+```
+
+Priority order:
+1. `.contextify.yml` — explicit `name:` field (highest priority, VCS-independent)
+2. VCS remote — parse `.git/config` or `.hg/hgrc` files (no git binary needed)
+3. Worktree strip — remove `/.claude/worktrees/<name>` suffix
+4. Raw path — unchanged fallback
+
+This means worktrees, different clone locations, and renames all resolve to the same project identity.
 
 ## TTL + Importance System
 
