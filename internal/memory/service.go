@@ -91,7 +91,7 @@ func (s *Service) Store(ctx context.Context, req StoreRequest) (*StoreResult, er
 			copy(mergedFrom[1:], existing.MergedFrom)
 			mergedFrom[0] = existing.ID // track the original state
 
-			if err := s.repo.UpdateMergeFields(ctx, existing.ID, title, content, tags, importance, existing.MergedFrom, &mergedEmb); err != nil {
+			if err := s.repo.UpdateMergeFields(ctx, existing.ID, title, content, tags, importance, mergedFrom, &mergedEmb); err != nil {
 				return nil, fmt.Errorf("auto-merge update: %w", err)
 			}
 

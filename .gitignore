@@ -34,3 +34,7 @@ ollama_models/
 # Environment
 .env
 .env.local
+
+# Local agent/tooling caches
+.gocache/
+.claude/worktrees/

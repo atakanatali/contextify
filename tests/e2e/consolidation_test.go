@@ -1,3 +1,6 @@
+//go:build e2e
+// +build e2e
+
 // Package e2e contains end-to-end tests that hit a running Contextify server.
 // Run with: go test ./tests/e2e/ -v -count=1
 // Requires: Contextify server running on localhost:8420
