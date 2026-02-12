@@ -7,6 +7,57 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Telemetry foundation for recall/store funnel tracking:
+  - Migration `004_telemetry.sql` with `memory_telemetry_events` table
+  - Indexes for `event_type + created_at`, `created_at`, `project_id`, `agent_source`, and `session_id`
+  - Event types: `recall_attempt`, `recall_hit`, `store_opportunity`, `store_action`
+- Non-blocking telemetry write path in memory service:
+  - Asynchronous event emission with timeout-based background writes
+  - Telemetry failures are logged and do not break API/MCP request flow
+- Request/session attribution in both API and MCP paths:
+  - `request_id` and optional `session_id` propagation via middleware/handlers
+  - Telemetry enrichment with `agent_source` and `project_id` when present
+- Funnel analytics backend and dashboard:
+  - New endpoint `GET /api/v1/analytics/funnel`
+  - Supports day-window or explicit `from/to` date range with `agent_source` and `project_id` filters
+  - Returns totals, timeline, and by-agent/by-project breakdowns
+  - Analytics page now includes recall/store funnel cards, trend chart, and breakdown lists
+- Session readiness enforcement across Claude/Cursor/Windsurf integrations:
+  - SessionStart + PostToolUse hooks enforce successful `get_context` before normal flow
+  - Updated tool prompts/rules to require recall-first and context-first behavior
+- High-confidence auto-store orchestration in PostToolUse hook:
+  - Auto-store on high-confidence commit/fix signals
+  - Falls back to pending/manual store flow when auto-store fails or confidence is low
+- Search v2 retrieval pipeline:
+  - Two-stage recall with lexical/vector-aware candidate prefilter
+  - Vector rerank with keyword weighting and lightweight relevance boosts
+  - Broad-query handling for empty/`*` queries to avoid pointless tsquery scoring
+- Bounded in-memory search cache:
+  - TTL-based cached recall results with configurable max entries
+  - Cache invalidation on memory mutations to prevent stale results
+  - New config keys: `search.cache_enabled`, `search.cache_ttl`, `search.cache_max_entries`
+- Recall benchmark & SLO reporting:
+  - New `tests/e2e/recall_benchmark_test.go` (`e2e` build tag)
+  - JSON benchmark report output via `RECALL_BENCH_REPORT_PATH`
+  - `make bench-recall` target
+  - Backend CI now runs recall benchmark and uploads `recall-benchmark-report` artifact
+- Local tooling ignore patterns:
+  - `.gocache/`
+  - `.claude/worktrees/`
+
+### Changed
+- Backend CI health-check workflow now ensures the embedding model is available before running the recall benchmark.
+- README expanded with benchmark/SLO execution and threshold/report environment variable guidance.
+
+### Fixed
+- Client/CLI API contract alignment:
+  - `store` client now parses `StoreResult` response shape
+  - `promote` client now parses status response payload
+  - CLI `promote` handles missing memory title fallback gracefully
+- Smart-store auto-merge now correctly updates `merged_from` lineage.
+- Consolidation E2E tests are now isolated behind the `e2e` build tag so default `go test ./...` runs remain stable.
+
 ## [0.6.1] - 2026-02-12
 
 
@@ -119,7 +170,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Docker image publishing and CI/CD pipeline
 - Architecture documentation
 
-[Unreleased]: https://github.com/atakanatali/contextify/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/atakanatali/contextify/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/atakanatali/contextify/compare/v0.5.3...v0.6.1
 [0.5.3]: https://github.com/atakanatali/contextify/compare/v0.2.0...v0.5.3
 [0.2.0]: https://github.com/atakanatali/contextify/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/atakanatali/contextify/releases/tag/v0.1.0
