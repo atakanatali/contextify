@@ -212,37 +212,96 @@ func (r *Repository) HybridSearch(ctx context.Context, queryEmbedding pgvector.V
 		offset = 0
 	}
 
-	args = append(args, req.Query, vectorWeight, keywordWeight, limit, offset)
+	queryText := strings.TrimSpace(req.Query)
+	isBroadQuery := queryText == "" || queryText == "*"
+
+	candidateLimit := limit * 6
+	if candidateLimit < 80 {
+		candidateLimit = 80
+	}
+	if candidateLimit > 400 {
+		candidateLimit = 400
+	}
+
 	queryArgIdx := argIdx
-	vwArgIdx := argIdx + 1
-	kwArgIdx := argIdx + 2
-	limitArgIdx := argIdx + 3
-	offsetArgIdx := argIdx + 4
+	args = append(args, queryText)
+	argIdx++
+
+	isBroadArgIdx := argIdx
+	args = append(args, isBroadQuery)
+	argIdx++
+
+	vwArgIdx := argIdx
+	args = append(args, vectorWeight)
+	argIdx++
+
+	kwArgIdx := argIdx
+	args = append(args, keywordWeight)
+	argIdx++
+
+	candidateLimitArgIdx := argIdx
+	args = append(args, candidateLimit)
+	argIdx++
+
+	boostClauses := []string{"0"}
+	if req.ProjectID != nil {
+		boostClauses = append(boostClauses, fmt.Sprintf("CASE WHEN c.project_id = $%d THEN 0.05 ELSE 0 END", argIdx))
+		args = append(args, *req.ProjectID)
+		argIdx++
+	}
+	if len(req.Tags) > 0 {
+		boostClauses = append(boostClauses, fmt.Sprintf("CASE WHEN c.tags && $%d THEN 0.03 ELSE 0 END", argIdx))
+		args = append(args, req.Tags)
+		argIdx++
+	}
+	boostExpr := strings.Join(boostClauses, " + ")
+
+	limitArgIdx := argIdx
+	args = append(args, limit)
+	argIdx++
+
+	offsetArgIdx := argIdx
+	args = append(args, offset)
 
 	query := fmt.Sprintf(`
-		WITH vector_scores AS (
-			SELECT m.id,
-			       1 - (m.embedding <=> $1) AS vector_score
+		WITH base AS (
+			SELECT
+				m.id, m.title, m.content, m.summary, m.type, m.scope, m.project_id,
+				m.agent_source, m.tags, m.importance, m.ttl_seconds, m.access_count,
+				m.created_at, m.updated_at, m.expires_at,
+				1 - (m.embedding <=> $1) AS vector_score,
+				CASE
+					WHEN $%d THEN 0::float8
+					ELSE ts_rank(
+						to_tsvector('english', COALESCE(m.title, '') || ' ' || COALESCE(m.content, '')),
+						plainto_tsquery('english', $%d)
+					)::float8
+				END AS keyword_score
 			FROM memories m
 			%s
 		),
-		keyword_scores AS (
-			SELECT m.id,
-			       ts_rank(to_tsvector('english', m.content), plainto_tsquery('english', $%d)) AS keyword_score
-			FROM memories m
-			%s
+		candidates AS (
+			SELECT *
+			FROM base
+			ORDER BY
+				CASE WHEN $%d THEN 0 ELSE keyword_score END DESC,
+				vector_score DESC,
+				updated_at DESC
+			LIMIT $%d
+		),
+		reranked AS (
+			SELECT c.*, (%s) AS relevance_boost
+			FROM candidates c
 		)
-		SELECT m.id, m.title, m.content, m.summary, m.type, m.scope, m.project_id,
-		       m.agent_source, m.tags, m.importance, m.ttl_seconds, m.access_count,
-		       m.created_at, m.updated_at, m.expires_at,
-		       COALESCE(v.vector_score, 0) * $%d + COALESCE(k.keyword_score, 0) * $%d AS combined_score
-		FROM memories m
-		LEFT JOIN vector_scores v ON m.id = v.id
-		LEFT JOIN keyword_scores k ON m.id = k.id
-		%s
-		ORDER BY combined_score DESC
+		SELECT
+			r.id, r.title, r.content, r.summary, r.type, r.scope, r.project_id,
+			r.agent_source, r.tags, r.importance, r.ttl_seconds, r.access_count,
+			r.created_at, r.updated_at, r.expires_at,
+			COALESCE(r.vector_score, 0) * $%d + COALESCE(r.keyword_score, 0) * $%d + r.relevance_boost AS combined_score
+		FROM reranked r
+		ORDER BY combined_score DESC, r.updated_at DESC
 		LIMIT $%d OFFSET $%d
-	`, whereClause, queryArgIdx, whereClause, vwArgIdx, kwArgIdx, whereClause, limitArgIdx, offsetArgIdx)
+	`, isBroadArgIdx, queryArgIdx, whereClause, isBroadArgIdx, candidateLimitArgIdx, boostExpr, vwArgIdx, kwArgIdx, limitArgIdx, offsetArgIdx)
 
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
