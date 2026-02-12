@@ -28,7 +28,7 @@ Call `recall_memories` BEFORE starting work when you encounter:
 - **importance**: 0.8+ critical/permanent, 0.5-0.7 standard, 0.3-0.4 minor/temporary
 - **tags**: Always include project name, technology, and category
 - **agent_source**: "claude-code"
-- **project_id**: Current working directory path
+- **project_id**: Current working directory path (auto-normalized by server to canonical project name)
 - **scope**: "project" for project-specific, "global" for cross-project knowledge
 
 ### Relationship Linking

@@ -68,7 +68,7 @@ type DeleteMemoryInput struct {
 type CreateRelationshipInput struct {
 	FromMemoryID string  `json:"from_memory_id" jsonschema:"Source memory UUID,required"`
 	ToMemoryID   string  `json:"to_memory_id" jsonschema:"Target memory UUID,required"`
-	Relationship string  `json:"relationship" jsonschema:"Type: SOLVES|CAUSES|RELATED_TO|REQUIRES|ADDRESSES,required"`
+	Relationship string  `json:"relationship" jsonschema:"Type: SOLVES|CAUSES|RELATED_TO|REQUIRES|ADDRESSES|SUPERSEDES,required"`
 	Strength     float32 `json:"strength,omitempty" jsonschema:"Strength 0.0-1.0"`
 	Context      *string `json:"context,omitempty" jsonschema:"Description of the relationship"`
 }
@@ -84,6 +84,25 @@ type GetContextInput struct {
 
 type PromoteMemoryInput struct {
 	MemoryID string `json:"memory_id" jsonschema:"Memory UUID to promote,required"`
+}
+
+// --- Consolidation tool inputs ---
+
+type ConsolidateMemoriesInput struct {
+	TargetID  string   `json:"target_id" jsonschema:"Target memory UUID to merge into,required"`
+	SourceIDs []string `json:"source_ids" jsonschema:"Source memory UUIDs to merge from,required"`
+	Strategy  string   `json:"strategy,omitempty" jsonschema:"Merge strategy: latest_wins|append|smart_merge"`
+}
+
+type FindSimilarInput struct {
+	MemoryID  string  `json:"memory_id" jsonschema:"Memory UUID to find similar memories for,required"`
+	Threshold float64 `json:"threshold,omitempty" jsonschema:"Minimum similarity (0.0-1.0, default 0.75)"`
+	Limit     int     `json:"limit,omitempty" jsonschema:"Max results (default 5)"`
+}
+
+type SuggestConsolidationsInput struct {
+	ProjectID *string `json:"project_id,omitempty" jsonschema:"Filter by project"`
+	Limit     int     `json:"limit,omitempty" jsonschema:"Max suggestions (default 10)"`
 }
 
 func (s *Server) registerTools() {
@@ -119,7 +138,7 @@ func (s *Server) registerTools() {
 
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
 		Name:        "create_relationship",
-		Description: "Link two memories with a typed relationship (SOLVES, CAUSES, RELATED_TO, REQUIRES, ADDRESSES).",
+		Description: "Link two memories with a typed relationship (SOLVES, CAUSES, RELATED_TO, REQUIRES, ADDRESSES, SUPERSEDES).",
 	}, s.createRelationship)
 
 	mcp.AddTool(s.mcpServer, &mcp.Tool{
@@ -136,6 +155,22 @@ func (s *Server) registerTools() {
 		Name:        "promote_memory",
 		Description: "Manually promote a short-term memory to permanent long-term storage.",
 	}, s.promoteMemory)
+
+	// Consolidation tools
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "consolidate_memories",
+		Description: "Merge multiple memories into one target memory. Source memories are marked as superseded. Use when you find duplicate or overlapping memories.",
+	}, s.consolidateMemories)
+
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "find_similar",
+		Description: "Find memories similar to a given memory ID using vector similarity. Useful for detecting duplicates.",
+	}, s.findSimilar)
+
+	mcp.AddTool(s.mcpServer, &mcp.Tool{
+		Name:        "suggest_consolidations",
+		Description: "Get server-generated suggestions for memories that should be consolidated. Returns pairs of similar memories.",
+	}, s.suggestConsolidations)
 }
 
 func (s *Server) storeMemory(ctx context.Context, req *mcp.CallToolRequest, input *StoreMemoryInput) (*mcp.CallToolResult, any, error) {
@@ -161,13 +196,23 @@ func (s *Server) storeMemory(ctx context.Context, req *mcp.CallToolRequest, inpu
 		TTLSeconds:  input.TTLSeconds,
 	}
 
-	mem, err := s.svc.Store(ctx, storeReq)
+	result, err := s.svc.Store(ctx, storeReq)
 	if err != nil {
 		return nil, nil, fmt.Errorf("store memory: %w", err)
 	}
 
-	return makeTextResult(fmt.Sprintf("Stored memory: %s (id: %s, type: %s, long-term: %v)",
-		mem.Title, mem.ID, mem.Type, mem.TTLSeconds == nil)), nil, nil
+	// Build response message based on action
+	switch result.Action {
+	case "updated":
+		msg := fmt.Sprintf("Auto-merged into existing memory: %s (id: %s). A highly similar memory already existed, so the content was merged.",
+			result.Memory.Title, result.Memory.ID)
+		return makeTextResult(msg), nil, nil
+	case "created_with_suggestions":
+		return makeJSONResult(result)
+	default:
+		return makeTextResult(fmt.Sprintf("Stored memory: %s (id: %s, type: %s, long-term: %v)",
+			result.Memory.Title, result.Memory.ID, result.Memory.Type, result.Memory.TTLSeconds == nil)), nil, nil
+	}
 }
 
 func (s *Server) recallMemories(ctx context.Context, req *mcp.CallToolRequest, input *RecallInput) (*mcp.CallToolResult, any, error) {
@@ -339,6 +384,67 @@ func (s *Server) promoteMemory(ctx context.Context, req *mcp.CallToolRequest, in
 	}
 
 	return makeTextResult(fmt.Sprintf("Promoted memory %s to long-term storage", id)), nil, nil
+}
+
+// --- Consolidation tool handlers ---
+
+func (s *Server) consolidateMemories(ctx context.Context, req *mcp.CallToolRequest, input *ConsolidateMemoriesInput) (*mcp.CallToolResult, any, error) {
+	targetID, err := uuid.Parse(input.TargetID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid target_id: %w", err)
+	}
+
+	var sourceIDs []uuid.UUID
+	for _, sid := range input.SourceIDs {
+		id, err := uuid.Parse(sid)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid source_id %s: %w", sid, err)
+		}
+		sourceIDs = append(sourceIDs, id)
+	}
+
+	strategy := memory.MergeStrategy(input.Strategy)
+	result, err := s.svc.ConsolidateMemories(ctx, targetID, sourceIDs, strategy, "agent")
+	if err != nil {
+		return nil, nil, fmt.Errorf("consolidate: %w", err)
+	}
+
+	return makeJSONResult(map[string]any{
+		"memory":       result,
+		"merged_count": len(sourceIDs),
+		"message":      fmt.Sprintf("Consolidated %d memories into %s", len(sourceIDs), targetID),
+	})
+}
+
+func (s *Server) findSimilar(ctx context.Context, req *mcp.CallToolRequest, input *FindSimilarInput) (*mcp.CallToolResult, any, error) {
+	id, err := uuid.Parse(input.MemoryID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid memory_id: %w", err)
+	}
+
+	results, err := s.svc.FindSimilarTo(ctx, id, input.Threshold, input.Limit)
+	if err != nil {
+		return nil, nil, fmt.Errorf("find similar: %w", err)
+	}
+
+	return makeJSONResult(results)
+}
+
+func (s *Server) suggestConsolidations(ctx context.Context, req *mcp.CallToolRequest, input *SuggestConsolidationsInput) (*mcp.CallToolResult, any, error) {
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+
+	suggestions, total, err := s.svc.GetSuggestions(ctx, input.ProjectID, "pending", limit, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get suggestions: %w", err)
+	}
+
+	return makeJSONResult(map[string]any{
+		"suggestions": suggestions,
+		"total":       total,
+	})
 }
 
 // Helper functions

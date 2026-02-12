@@ -44,8 +44,15 @@ func NewRouter(svc *memory.Service) *chi.Mux {
 		// Promote
 		r.Post("/memories/{id}/promote", h.PromoteMemory)
 
+		// Merge
+		r.Post("/memories/{id}/merge", h.MergeMemories)
+
 		// Related
 		r.Get("/memories/{id}/related", h.GetRelatedMemories)
+
+		// Duplicates & Consolidation
+		r.Get("/memories/duplicates", h.GetDuplicates)
+		r.Post("/memories/consolidate", h.BatchConsolidate)
 
 		// Relationships
 		r.Post("/relationships", h.CreateRelationship)
@@ -55,6 +62,14 @@ func NewRouter(svc *memory.Service) *chi.Mux {
 
 		// Context
 		r.Post("/context/{project}", h.GetContext)
+
+		// Consolidation
+		r.Get("/consolidation/suggestions", h.GetSuggestions)
+		r.Put("/consolidation/suggestions/{id}", h.UpdateSuggestion)
+		r.Get("/consolidation/log", h.GetConsolidationLog)
+
+		// Admin
+		r.Post("/admin/normalize-projects", h.NormalizeProjects)
 	})
 
 	// Serve embedded Web UI static files (SPA with fallback to index.html)

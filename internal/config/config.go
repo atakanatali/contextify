@@ -36,11 +36,23 @@ type EmbeddingConfig struct {
 }
 
 type MemoryConfig struct {
-	DefaultTTL         int           `yaml:"default_ttl"`
-	PromoteAccessCount int           `yaml:"promote_access_count"`
-	PromoteImportance  float64       `yaml:"promote_importance"`
-	TTLExtendFactor    float64       `yaml:"ttl_extend_factor"`
-	CleanupInterval    time.Duration `yaml:"cleanup_interval"`
+	DefaultTTL         int                 `yaml:"default_ttl"`
+	PromoteAccessCount int                 `yaml:"promote_access_count"`
+	PromoteImportance  float64             `yaml:"promote_importance"`
+	TTLExtendFactor    float64             `yaml:"ttl_extend_factor"`
+	CleanupInterval    time.Duration       `yaml:"cleanup_interval"`
+	NormalizeProjectID bool                `yaml:"normalize_project_id"`
+	Consolidation      ConsolidationConfig `yaml:"consolidation"`
+}
+
+type ConsolidationConfig struct {
+	Enabled            bool          `yaml:"enabled"`
+	AutoMergeThreshold float64       `yaml:"auto_merge_threshold"`
+	SuggestThreshold   float64       `yaml:"suggest_threshold"`
+	MergeStrategy      string        `yaml:"merge_strategy"`
+	ScanInterval       time.Duration `yaml:"scan_interval"`
+	ScanBatchSize      int           `yaml:"scan_batch_size"`
+	ReplacedRetention  time.Duration `yaml:"replaced_retention"`
 }
 
 type SearchConfig struct {
@@ -55,7 +67,18 @@ func Load(path string) (*Config, error) {
 		Server:    ServerConfig{Port: 8420, Host: "0.0.0.0"},
 		Database:  DatabaseConfig{URL: "postgres://contextify:contextify_local@localhost:5432/contextify?sslmode=disable", MaxOpenConns: 25, MaxIdleConns: 5, ConnMaxLifetime: 5 * time.Minute},
 		Embedding: EmbeddingConfig{Provider: "ollama", OllamaURL: "http://localhost:11434", Model: "nomic-embed-text", Dimensions: 768},
-		Memory:    MemoryConfig{DefaultTTL: 86400, PromoteAccessCount: 5, PromoteImportance: 0.8, TTLExtendFactor: 0.5, CleanupInterval: 5 * time.Minute},
+		Memory: MemoryConfig{
+			DefaultTTL: 86400, PromoteAccessCount: 5, PromoteImportance: 0.8, TTLExtendFactor: 0.5, CleanupInterval: 5 * time.Minute, NormalizeProjectID: true,
+			Consolidation: ConsolidationConfig{
+				Enabled:            true,
+				AutoMergeThreshold: 0.92,
+				SuggestThreshold:   0.75,
+				MergeStrategy:      "smart_merge",
+				ScanInterval:       1 * time.Hour,
+				ScanBatchSize:      100,
+				ReplacedRetention:  7 * 24 * time.Hour,
+			},
+		},
 		Search:    SearchConfig{VectorWeight: 0.7, KeywordWeight: 0.3, DefaultLimit: 20, MaxLimit: 100},
 	}
 
@@ -86,5 +109,24 @@ func applyEnvOverrides(cfg *Config) {
 		if port, err := strconv.Atoi(v); err == nil {
 			cfg.Server.Port = port
 		}
+	}
+	if v := os.Getenv("CONSOLIDATION_ENABLED"); v != "" {
+		cfg.Memory.Consolidation.Enabled = v == "true" || v == "1"
+	}
+	if v := os.Getenv("CONSOLIDATION_AUTO_MERGE_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Memory.Consolidation.AutoMergeThreshold = f
+		}
+	}
+	if v := os.Getenv("CONSOLIDATION_SUGGEST_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Memory.Consolidation.SuggestThreshold = f
+		}
+	}
+	if v := os.Getenv("CONSOLIDATION_MERGE_STRATEGY"); v != "" {
+		cfg.Memory.Consolidation.MergeStrategy = v
+	}
+	if v := os.Getenv("NORMALIZE_PROJECT_ID"); v != "" {
+		cfg.Memory.NormalizeProjectID = v == "true" || v == "1"
 	}
 }

@@ -61,4 +61,44 @@ export const api = {
 
   promoteMemory: (id) =>
     request(`/memories/${id}/promote`, { method: 'POST' }),
+
+  // Consolidation
+  mergeMemories: (targetId, sourceIds, strategy) =>
+    request(`/memories/${targetId}/merge`, {
+      method: 'POST',
+      body: JSON.stringify({ source_ids: sourceIds, strategy }),
+    }),
+
+  getDuplicates: ({ projectId, limit } = {}) =>
+    request(`/memories/duplicates?${new URLSearchParams({
+      ...(projectId && { project_id: projectId }),
+      ...(limit && { limit: String(limit) }),
+    })}`),
+
+  batchConsolidate: (operations, strategy) =>
+    request('/memories/consolidate', {
+      method: 'POST',
+      body: JSON.stringify({ operations, strategy }),
+    }),
+
+  getSuggestions: ({ projectId, status = 'pending', limit = 20, offset = 0 } = {}) =>
+    request(`/consolidation/suggestions?${new URLSearchParams({
+      ...(projectId && { project_id: projectId }),
+      status,
+      limit: String(limit),
+      offset: String(offset),
+    })}`),
+
+  updateSuggestion: (id, status) =>
+    request(`/consolidation/suggestions/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ status }),
+    }),
+
+  getConsolidationLog: ({ targetId, limit = 20, offset = 0 } = {}) =>
+    request(`/consolidation/log?${new URLSearchParams({
+      ...(targetId && { target_id: targetId }),
+      limit: String(limit),
+      offset: String(offset),
+    })}`),
 }

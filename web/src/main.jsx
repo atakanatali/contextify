@@ -7,6 +7,7 @@ import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import MemoryBrowser from './pages/MemoryBrowser'
 import Search from './pages/Search'
+import Consolidation from './pages/Consolidation'
 import EmptyState from './components/EmptyState'
 
 function NotFound() {
@@ -22,6 +23,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/" element={<Dashboard />} />
             <Route path="/memories" element={<MemoryBrowser />} />
             <Route path="/search" element={<Search />} />
+            <Route path="/consolidation" element={<Consolidation />} />
             <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>

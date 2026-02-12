@@ -10,6 +10,7 @@ const STAT_ICONS = [
   { key: 'longterm', icon: '💎', label: 'Long-term', color: 'from-emerald-600 to-emerald-700' },
   { key: 'shortterm', icon: '⏳', label: 'Short-term', color: 'from-amber-600 to-amber-700' },
   { key: 'expiring', icon: '🔥', label: 'Expiring Soon', color: 'from-red-600 to-red-700' },
+  { key: 'pending', icon: '🔗', label: 'Pending Merges', color: 'from-violet-600 to-violet-700', link: '/consolidation' },
 ]
 
 const TYPE_COLORS = {
@@ -59,18 +60,22 @@ export default function Dashboard() {
   return (
     <div className="space-y-8 animate-fade-in">
       {/* Stat cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         {!stats ? (
-          Array.from({ length: 4 }).map((_, i) => <SkeletonStatCard key={i} />)
+          Array.from({ length: 5 }).map((_, i) => <SkeletonStatCard key={i} />)
         ) : (
-          STAT_ICONS.map(({ key, icon, label, color }) => {
+          STAT_ICONS.map(({ key, icon, label, color, link }) => {
             const value = key === 'total' ? stats.total_memories
               : key === 'longterm' ? stats.long_term_count
               : key === 'shortterm' ? stats.short_term_count
-              : stats.expiring_count
+              : key === 'expiring' ? stats.expiring_count
+              : stats.pending_suggestions || 0
+
+            const Wrapper = link ? Link : 'div'
+            const wrapperProps = link ? { to: link } : {}
 
             return (
-              <div key={key} className="card p-5">
+              <Wrapper key={key} {...wrapperProps} className={`card p-5 ${link ? 'hover:border-brand-500/30 transition-colors cursor-pointer' : ''}`}>
                 <div className="flex items-center gap-3 mb-3">
                   <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${color} flex items-center justify-center text-lg shadow-lg`}>
                     {icon}
@@ -78,7 +83,7 @@ export default function Dashboard() {
                   <span className="text-xs text-gray-500 uppercase tracking-wider font-medium">{label}</span>
                 </div>
                 <div className="text-3xl font-bold text-white tabular-nums">{value}</div>
-              </div>
+              </Wrapper>
             )
           })
         )}
