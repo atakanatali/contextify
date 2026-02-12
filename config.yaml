@@ -26,3 +26,6 @@ search:
   keyword_weight: 0.3       # weight for keyword match in hybrid search
   default_limit: 20
   max_limit: 100
+  cache_enabled: true       # enable hot-query search cache
+  cache_ttl: 30s            # cache item TTL
+  cache_max_entries: 500    # max number of cached query keys

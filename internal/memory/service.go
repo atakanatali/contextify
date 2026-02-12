@@ -19,6 +19,7 @@ type Service struct {
 	normalizer *ProjectNormalizer
 	cfg        config.MemoryConfig
 	searchCfg  config.SearchConfig
+	cache      *searchCache
 }
 
 func NewService(repo *Repository, embedder *embedding.Client, cfg config.MemoryConfig, searchCfg config.SearchConfig) *Service {
@@ -28,6 +29,7 @@ func NewService(repo *Repository, embedder *embedding.Client, cfg config.MemoryC
 		normalizer: NewProjectNormalizer(),
 		cfg:        cfg,
 		searchCfg:  searchCfg,
+		cache:      newSearchCache(searchCfg),
 	}
 }
 
@@ -63,6 +65,12 @@ func (s *Service) emitTelemetryEvent(event TelemetryEvent) {
 			slog.Warn("failed to store telemetry event", "event_type", ev.EventType, "error", err)
 		}
 	}(event)
+}
+
+func (s *Service) invalidateSearchCache() {
+	if s.cache != nil {
+		s.cache.InvalidateAll()
+	}
 }
 
 // Store creates a new memory with smart dedup.
@@ -185,6 +193,7 @@ func (s *Service) Store(ctx context.Context, req StoreRequest) (*StoreResult, er
 			} else {
 				emitStoreAction(result.Action, nil, map[string]any{"similarity": similar[0].Similarity})
 			}
+			s.invalidateSearchCache()
 			return result, nil
 		} else if len(similar) > 0 {
 			// Store normally but attach suggestions
@@ -209,6 +218,7 @@ func (s *Service) Store(ctx context.Context, req StoreRequest) (*StoreResult, er
 			}
 			memID := result.Memory.ID
 			emitStoreAction(result.Action, &memID, map[string]any{"suggestions": len(suggestions)})
+			s.invalidateSearchCache()
 			return result, nil
 		}
 	}
@@ -226,6 +236,7 @@ func (s *Service) Store(ctx context.Context, req StoreRequest) (*StoreResult, er
 	}
 	memID := result.Memory.ID
 	emitStoreAction(result.Action, &memID, nil)
+	s.invalidateSearchCache()
 	return result, nil
 }
 
@@ -337,12 +348,16 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, req UpdateRequest) (
 	if err := s.repo.Update(ctx, id, req, newEmbedding); err != nil {
 		return nil, err
 	}
-
+	s.invalidateSearchCache()
 	return s.repo.Get(ctx, id)
 }
 
 func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
-	return s.repo.Delete(ctx, id)
+	if err := s.repo.Delete(ctx, id); err != nil {
+		return err
+	}
+	s.invalidateSearchCache()
+	return nil
 }
 
 func (s *Service) Search(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
@@ -369,6 +384,33 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]SearchResult
 		req.Limit = s.searchCfg.MaxLimit
 	}
 
+	if s.cache != nil && s.cache.Enabled() {
+		if cached, ok := s.cache.Get(req); ok {
+			hitCount := len(cached)
+			latencyMs := int(time.Since(start).Milliseconds())
+			s.emitTelemetryEvent(TelemetryEvent{
+				EventType:   TelemetryRecallHit,
+				SessionID:   sessionID,
+				RequestID:   requestID,
+				AgentSource: req.AgentSource,
+				ProjectID:   req.ProjectID,
+				QueryText:   &req.Query,
+				HitCount:    &hitCount,
+				LatencyMs:   &latencyMs,
+				Metadata:    map[string]any{"cache_hit": true},
+			})
+
+			for _, r := range cached {
+				go func(id uuid.UUID) {
+					bgCtx := context.Background()
+					s.repo.IncrementAccess(bgCtx, id, s.cfg.TTLExtendFactor)
+				}(r.Memory.ID)
+			}
+
+			return cached, nil
+		}
+	}
+
 	vec, err := s.embedder.Embed(ctx, req.Query)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
@@ -378,6 +420,9 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]SearchResult
 	results, err := s.repo.HybridSearch(ctx, queryEmbedding, req, s.searchCfg.VectorWeight, s.searchCfg.KeywordWeight)
 	if err != nil {
 		return nil, err
+	}
+	if s.cache != nil && s.cache.Enabled() {
+		s.cache.Set(req, results)
 	}
 
 	hitCount := len(results)
@@ -391,6 +436,7 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]SearchResult
 		QueryText:   &req.Query,
 		HitCount:    &hitCount,
 		LatencyMs:   &latencyMs,
+		Metadata:    map[string]any{"cache_hit": false},
 	})
 
 	// Increment access for returned results
@@ -405,7 +451,11 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) ([]SearchResult
 }
 
 func (s *Service) Promote(ctx context.Context, id uuid.UUID) error {
-	return s.repo.PromoteToLongTerm(ctx, id)
+	if err := s.repo.PromoteToLongTerm(ctx, id); err != nil {
+		return err
+	}
+	s.invalidateSearchCache()
+	return nil
 }
 
 func (s *Service) CreateRelationship(ctx context.Context, req RelationshipRequest) (*Relationship, error) {
@@ -470,7 +520,14 @@ func (s *Service) GetFunnelAnalytics(ctx context.Context, req FunnelAnalyticsReq
 }
 
 func (s *Service) CleanupExpired(ctx context.Context) (int64, error) {
-	return s.repo.DeleteExpired(ctx)
+	count, err := s.repo.DeleteExpired(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if count > 0 {
+		s.invalidateSearchCache()
+	}
+	return count, nil
 }
 
 // --- Consolidation service methods ---
@@ -591,6 +648,7 @@ func (s *Service) ConsolidateMemories(ctx context.Context, targetID uuid.UUID, s
 		"sources", len(sources),
 		"strategy", strategy,
 	)
+	s.invalidateSearchCache()
 
 	return s.repo.Get(ctx, targetID)
 }
@@ -700,6 +758,8 @@ func (s *Service) NormalizeAllProjectIDs(ctx context.Context) (int, error) {
 			updated += n
 		}
 	}
-
+	if updated > 0 {
+		s.invalidateSearchCache()
+	}
 	return updated, nil
 }
