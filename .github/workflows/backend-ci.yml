@@ -69,6 +69,19 @@ jobs:
       - name: Build server
         run: go build -o contextify ./cmd/server
 
+      - name: Ensure embedding model
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:11434/api/tags > /dev/null 2>&1; then
+              break
+            fi
+            echo "Waiting for ollama... ($i/30)"
+            sleep 2
+          done
+          curl -sf -X POST http://127.0.0.1:11434/api/pull \
+            -H 'Content-Type: application/json' \
+            -d '{"model":"nomic-embed-text","stream":false}'
+
       - name: Create pgvector extension
         env:
           PGPASSWORD: contextify_local
@@ -120,6 +133,25 @@ jobs:
 
           echo "All endpoints responding."
 
+      - name: Run recall benchmark
+        env:
+          RECALL_BENCH_MAX_P95_MS: "2500"
+          RECALL_BENCH_MIN_HIT_RATE: "0.80"
+          RECALL_BENCH_REPORT_PATH: artifacts/recall-benchmark-report.json
+        run: |
+          mkdir -p artifacts
+          make bench-recall 2>&1 | tee artifacts/recall-benchmark.log
+
       - name: Stop server
         if: always()
         run: kill $SERVER_PID 2>/dev/null || true
+
+      - name: Upload recall benchmark artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recall-benchmark-report
+          path: |
+            artifacts/recall-benchmark-report.json
+            artifacts/recall-benchmark.log
+          if-no-files-found: warn
