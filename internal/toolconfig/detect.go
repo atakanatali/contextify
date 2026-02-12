@@ -27,6 +27,15 @@ func DetectInstalledTools() []ToolName {
 		installed = append(installed, ToolClaudeCode)
 	}
 
+	// Claude Desktop / Cowork: check if config dir exists
+	configPath := claudeDesktopConfigPath()
+	if dirExists(filepath.Dir(configPath)) {
+		installed = append(installed, ToolClaudeDesktop)
+	}
+
+	// Claude Chat: always available (remote MCP via claude.ai UI)
+	installed = append(installed, ToolClaudeChat)
+
 	// Cursor: check if ~/.cursor/ exists
 	if dirExists(expandPath("~/.cursor")) {
 		installed = append(installed, ToolCursor)
@@ -48,6 +57,10 @@ func CheckStatus(tool ToolName) ToolStatus {
 	switch tool {
 	case ToolClaudeCode:
 		return checkClaudeCodeStatus()
+	case ToolClaudeDesktop:
+		return checkClaudeDesktopStatus()
+	case ToolClaudeChat:
+		return checkClaudeChatStatus()
 	case ToolCursor:
 		return checkCursorStatus()
 	case ToolWindsurf:
@@ -85,6 +98,10 @@ func UpdateConfiguredTools(mcpURL string) ([]ToolName, error) {
 		switch tool {
 		case ToolClaudeCode:
 			err = UpdateClaudeCode(mcpURL)
+		case ToolClaudeDesktop:
+			err = UpdateClaudeDesktop(mcpURL)
+		case ToolClaudeChat:
+			err = UpdateClaudeChat(mcpURL)
 		case ToolCursor:
 			err = UpdateCursor(mcpURL)
 		case ToolWindsurf:

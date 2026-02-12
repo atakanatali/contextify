@@ -106,6 +106,36 @@ check_gemini_status() {
     fi
 }
 
+check_claude_desktop_status() {
+    local config_path=""
+    case "$(uname -s)" in
+        Darwin) config_path="${HOME}/Library/Application Support/Claude/claude_desktop_config.json" ;;
+        MINGW*|MSYS*|CYGWIN*) config_path="${APPDATA}/Claude/claude_desktop_config.json" ;;
+        *) config_path="${HOME}/.config/Claude/claude_desktop_config.json" ;;
+    esac
+    local instr_path="${HOME}/.contextify/claude-desktop-instructions.md"
+    local has_mcp=false has_instr=false
+
+    json_has_key "$config_path" "mcpServers.contextify" 2>/dev/null && has_mcp=true
+    [ -f "$instr_path" ] && has_instr=true
+
+    if $has_mcp && $has_instr; then
+        echo "configured"
+    elif $has_mcp || $has_instr; then
+        echo "partial"
+    else
+        echo "not-configured"
+    fi
+}
+
+check_claude_chat_status() {
+    if [ -f "${HOME}/.contextify/claude-chat-instructions.md" ]; then
+        echo "configured"
+    else
+        echo "not-configured"
+    fi
+}
+
 _status_label() {
     case "$1" in
         configured)     printf '\033[0;32m✓ configured\033[0m' ;;
@@ -232,8 +262,10 @@ interactive_tool_selection() {
         exit 1
     fi
 
-    local claude_status cursor_status windsurf_status gemini_status
+    local claude_status desktop_status chat_status cursor_status windsurf_status gemini_status
     claude_status=$(check_claude_code_status)
+    desktop_status=$(check_claude_desktop_status)
+    chat_status=$(check_claude_chat_status)
     cursor_status=$(check_cursor_status)
     windsurf_status=$(check_windsurf_status)
     gemini_status=$(check_gemini_status)
@@ -241,15 +273,17 @@ interactive_tool_selection() {
     echo ""
     echo "  Which AI tools would you like to configure?"
     echo ""
-    printf "    [1] Claude Code   "; _status_label "$claude_status"; echo ""
-    printf "    [2] Cursor        "; _status_label "$cursor_status"; echo ""
-    printf "    [3] Windsurf      "; _status_label "$windsurf_status"; echo ""
-    printf "    [4] Gemini        "; _status_label "$gemini_status"; echo ""
+    printf "    [1] Claude Code            "; _status_label "$claude_status"; echo ""
+    printf "    [2] Claude Desktop / Cowork "; _status_label "$desktop_status"; echo ""
+    printf "    [3] Claude Chat (claude.ai) "; _status_label "$chat_status"; echo ""
+    printf "    [4] Cursor                 "; _status_label "$cursor_status"; echo ""
+    printf "    [5] Windsurf               "; _status_label "$windsurf_status"; echo ""
+    printf "    [6] Gemini                 "; _status_label "$gemini_status"; echo ""
     echo ""
     echo "    [a] All of the above"
     echo "    [q] Quit"
     echo ""
-    printf "  Select tools (e.g. 1,3 or a): "
+    printf "  Select tools (e.g. 1,2,3 or a): "
     read -r selection
 
     SELECTED_TOOLS=()
@@ -257,10 +291,12 @@ interactive_tool_selection() {
     for item in $selection; do
         case "$item" in
             1) SELECTED_TOOLS+=("claude-code") ;;
-            2) SELECTED_TOOLS+=("cursor") ;;
-            3) SELECTED_TOOLS+=("windsurf") ;;
-            4) SELECTED_TOOLS+=("gemini") ;;
-            a|A|all) SELECTED_TOOLS=("claude-code" "cursor" "windsurf" "gemini"); break ;;
+            2) SELECTED_TOOLS+=("claude-desktop") ;;
+            3) SELECTED_TOOLS+=("claude-chat") ;;
+            4) SELECTED_TOOLS+=("cursor") ;;
+            5) SELECTED_TOOLS+=("windsurf") ;;
+            6) SELECTED_TOOLS+=("gemini") ;;
+            a|A|all) SELECTED_TOOLS=("claude-code" "claude-desktop" "claude-chat" "cursor" "windsurf" "gemini"); break ;;
             q|Q|quit) echo ""; info "Setup cancelled."; exit 0 ;;
             *) warn "Unknown selection: $item (ignoring)" ;;
         esac
@@ -476,13 +512,100 @@ GEMINIEOF
     fi
 }
 
+configure_claude_desktop() {
+    info "Configuring Claude Desktop / Cowork..."
+
+    local config_path=""
+    case "$(uname -s)" in
+        Darwin) config_path="${HOME}/Library/Application Support/Claude/claude_desktop_config.json" ;;
+        MINGW*|MSYS*|CYGWIN*) config_path="${APPDATA}/Claude/claude_desktop_config.json" ;;
+        *) config_path="${HOME}/.config/Claude/claude_desktop_config.json" ;;
+    esac
+
+    # Check that npx is available (required for mcp-remote bridge)
+    if ! command -v npx &>/dev/null; then
+        warn "npx not found. Claude Desktop requires Node.js for mcp-remote bridge."
+        warn "Install Node.js: https://nodejs.org/"
+        return 1
+    fi
+
+    # Claude Desktop only supports stdio transport via config file.
+    # Use npx mcp-remote to bridge our HTTP endpoint to stdio.
+    mkdir -p "$(dirname "$config_path")"
+    if json_has_key "$config_path" "mcpServers.contextify" 2>/dev/null; then
+        ok "MCP server already configured in Claude Desktop (skipping)"
+    else
+        json_set_nested "$config_path" "mcpServers.contextify" '{"command":"npx","args":["mcp-remote","'"${CONTEXTIFY_MCP_URL}"'"]}'
+        ok "Added MCP server to Claude Desktop config"
+    fi
+
+    # Install instructions file
+    local instr_path="${HOME}/.contextify/claude-desktop-instructions.md"
+    mkdir -p "${HOME}/.contextify"
+    if [ -f "${SCRIPT_DIR}/prompts/claude-desktop.md" ]; then
+        cp "${SCRIPT_DIR}/prompts/claude-desktop.md" "$instr_path"
+    else
+        cat > "$instr_path" << 'DESKTOPEOF'
+# Contextify Memory System — Claude Desktop / Cowork
+Use MCP tools: get_context, store_memory, recall_memories.
+Set agent_source to "claude-desktop".
+DESKTOPEOF
+    fi
+    ok "Claude Desktop / Cowork configured"
+    info "Restart Claude Desktop to load the new MCP server."
+}
+
+configure_claude_chat() {
+    info "Configuring Claude Chat (claude.ai)..."
+
+    # Claude Chat only supports remote MCP via Settings > Connectors (UI-only).
+    # We save instructions and guide the user.
+    local instr_path="${HOME}/.contextify/claude-chat-instructions.md"
+    mkdir -p "${HOME}/.contextify"
+
+    cat > "$instr_path" << CHATEOF
+# Contextify Memory System — Claude Chat (claude.ai)
+
+## MCP Server URL
+${CONTEXTIFY_MCP_URL}
+
+## Setup Instructions
+1. Go to https://claude.ai → Settings → Connectors
+2. Click "Add custom connector"
+3. Enter the MCP URL above
+4. Enable the connector in each conversation via "+" → "Connectors"
+
+## Memory Protocol
+- agent_source: "claude-chat"
+- Call get_context at session start
+- Call store_memory after fixes, decisions, and patterns
+- Call recall_memories before research
+CHATEOF
+    ok "Claude Chat instructions saved"
+
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────────────────┐"
+    echo "  │  Claude Chat requires manual setup on claude.ai:           │"
+    echo "  │                                                             │"
+    echo "  │  1. Go to https://claude.ai → Settings → Connectors        │"
+    echo "  │  2. Click 'Add custom connector'                           │"
+    echo "  │  3. Enter MCP URL: ${CONTEXTIFY_MCP_URL}$(printf '%*s' $((25 - ${#CONTEXTIFY_MCP_URL})) '')│"
+    echo "  │  4. Enable connector in conversations via '+' → Connectors │"
+    echo "  │                                                             │"
+    echo "  │  Note: Requires Pro, Max, Team, or Enterprise plan.        │"
+    echo "  └─────────────────────────────────────────────────────────────┘"
+    echo ""
+}
+
 configure_tools() {
     for tool in "${SELECTED_TOOLS[@]}"; do
         case "$tool" in
-            claude-code) configure_claude_code ;;
-            cursor)      configure_cursor ;;
-            windsurf)    configure_windsurf ;;
-            gemini)      configure_gemini ;;
+            claude-code)    configure_claude_code ;;
+            claude-desktop) configure_claude_desktop ;;
+            claude-chat)    configure_claude_chat ;;
+            cursor)         configure_cursor ;;
+            windsurf)       configure_windsurf ;;
+            gemini)         configure_gemini ;;
         esac
     done
 }
@@ -544,8 +667,10 @@ run_self_test() {
 update_tool_configs() {
     info "Updating tool configurations..."
 
-    local claude_status cursor_status windsurf_status gemini_status
+    local claude_status desktop_status chat_status cursor_status windsurf_status gemini_status
     claude_status=$(check_claude_code_status)
+    desktop_status=$(check_claude_desktop_status)
+    chat_status=$(check_claude_chat_status)
     cursor_status=$(check_cursor_status)
     windsurf_status=$(check_windsurf_status)
     gemini_status=$(check_gemini_status)
@@ -623,6 +748,19 @@ with open('$claude_md', 'w') as f:
         updated=$((updated + 1))
     fi
 
+    if [ "$desktop_status" != "not-configured" ]; then
+        # Re-run configure to update MCP config
+        configure_claude_desktop 2>/dev/null || true
+        ok "Claude Desktop configs updated"
+        updated=$((updated + 1))
+    fi
+
+    if [ "$chat_status" != "not-configured" ]; then
+        configure_claude_chat 2>/dev/null || true
+        ok "Claude Chat configs updated"
+        updated=$((updated + 1))
+    fi
+
     if [ "$updated" -eq 0 ]; then
         info "No configured tools found to update."
     fi
@@ -634,7 +772,7 @@ restart_tools() {
 
     for tool in "${SELECTED_TOOLS[@]}"; do
         case "$tool" in
-            cursor|windsurf) needs_restart=true; break ;;
+            cursor|windsurf|claude-desktop) needs_restart=true; break ;;
         esac
     done
 
@@ -659,6 +797,13 @@ restart_tools() {
                     pkill -f "Windsurf" 2>/dev/null || true
                     sleep 2
                     open -a "Windsurf" 2>/dev/null && ok "Windsurf restarted" || warn "Could not relaunch Windsurf (open it manually)"
+                fi
+                ;;
+            claude-desktop)
+                if pgrep -f "Claude" &>/dev/null; then
+                    pkill -f "Claude" 2>/dev/null || true
+                    sleep 2
+                    open -a "Claude" 2>/dev/null && ok "Claude Desktop restarted" || warn "Could not relaunch Claude Desktop (open it manually)"
                 fi
                 ;;
         esac
@@ -689,12 +834,14 @@ print_summary() {
         for tool in "${SELECTED_TOOLS[@]}"; do
             local status
             case "$tool" in
-                claude-code) status=$(check_claude_code_status) ;;
-                cursor)      status=$(check_cursor_status) ;;
-                windsurf)    status=$(check_windsurf_status) ;;
-                gemini)      status=$(check_gemini_status) ;;
+                claude-code)    status=$(check_claude_code_status) ;;
+                claude-desktop) status=$(check_claude_desktop_status) ;;
+                claude-chat)    status=$(check_claude_chat_status) ;;
+                cursor)         status=$(check_cursor_status) ;;
+                windsurf)       status=$(check_windsurf_status) ;;
+                gemini)         status=$(check_gemini_status) ;;
             esac
-            printf "    %-14s " "${tool}"
+            printf "    %-18s " "${tool}"
             _status_label "$status"
             echo ""
         done
@@ -763,9 +910,23 @@ with open('$claude_md', 'w') as f:
     fi
     rm -f "${HOME}/.codeium/windsurf/memories/contextify.md" 2>/dev/null || true
 
-    # Hooks directory & Gemini
+    # Claude Desktop / Cowork
+    local desktop_config=""
+    case "$(uname -s)" in
+        Darwin) desktop_config="${HOME}/Library/Application Support/Claude/claude_desktop_config.json" ;;
+        MINGW*|MSYS*|CYGWIN*) desktop_config="${APPDATA}/Claude/claude_desktop_config.json" ;;
+        *) desktop_config="${HOME}/.config/Claude/claude_desktop_config.json" ;;
+    esac
+    if [ -f "$desktop_config" ]; then
+        json_remove_key "$desktop_config" "mcpServers.contextify" 2>/dev/null || true
+        ok "Removed Claude Desktop MCP config"
+    fi
+
+    # Hooks directory, Gemini, Claude Desktop instructions, Claude Chat instructions
     rm -rf "${HOOKS_DIR}" 2>/dev/null || true
     rm -f "${HOME}/.contextify/gemini-instructions.md" 2>/dev/null || true
+    rm -f "${HOME}/.contextify/claude-desktop-instructions.md" 2>/dev/null || true
+    rm -f "${HOME}/.contextify/claude-chat-instructions.md" 2>/dev/null || true
     rmdir "${HOME}/.contextify" 2>/dev/null || true
 
     ok "Uninstall complete. Docker container left running (stop with: docker stop contextify)"
@@ -786,7 +947,7 @@ show_help() {
     echo "    ./install.sh --uninstall                   Remove all configurations"
     echo "    ./install.sh --help                        Show this help"
     echo ""
-    echo "  Supported tools: claude-code, cursor, windsurf, gemini"
+    echo "  Supported tools: claude-code, claude-desktop, claude-chat, cursor, windsurf, gemini"
     echo ""
     echo "  Environment variables:"
     echo "    CONTEXTIFY_URL     Server URL (default: http://localhost:8420)"
@@ -811,17 +972,19 @@ show_status() {
 
     echo ""
     echo "  Tool configurations:"
-    local tools=("claude-code" "cursor" "windsurf" "gemini")
-    local names=("Claude Code" "Cursor" "Windsurf" "Gemini")
+    local tools=("claude-code" "claude-desktop" "claude-chat" "cursor" "windsurf" "gemini")
+    local names=("Claude Code" "Claude Desktop" "Claude Chat" "Cursor" "Windsurf" "Gemini")
     for i in "${!tools[@]}"; do
         local status
         case "${tools[$i]}" in
-            claude-code) status=$(check_claude_code_status) ;;
-            cursor)      status=$(check_cursor_status) ;;
-            windsurf)    status=$(check_windsurf_status) ;;
-            gemini)      status=$(check_gemini_status) ;;
+            claude-code)    status=$(check_claude_code_status) ;;
+            claude-desktop) status=$(check_claude_desktop_status) ;;
+            claude-chat)    status=$(check_claude_chat_status) ;;
+            cursor)         status=$(check_cursor_status) ;;
+            windsurf)       status=$(check_windsurf_status) ;;
+            gemini)         status=$(check_gemini_status) ;;
         esac
-        printf "    %-14s " "${names[$i]}"
+        printf "    %-18s " "${names[$i]}"
         _status_label "$status"
         echo ""
     done
@@ -855,14 +1018,14 @@ main() {
                 # Validate tool names
                 for tool in "${SELECTED_TOOLS[@]}"; do
                     case "$tool" in
-                        claude-code|cursor|windsurf|gemini) ;;
-                        *) fail "Unknown tool: $tool. Valid: claude-code, cursor, windsurf, gemini"; exit 1 ;;
+                        claude-code|claude-desktop|claude-chat|cursor|windsurf|gemini) ;;
+                        *) fail "Unknown tool: $tool. Valid: claude-code, claude-desktop, claude-chat, cursor, windsurf, gemini"; exit 1 ;;
                     esac
                 done
                 ;;
             --all)
                 mode="non-interactive"
-                SELECTED_TOOLS=("claude-code" "cursor" "windsurf" "gemini")
+                SELECTED_TOOLS=("claude-code" "claude-desktop" "claude-chat" "cursor" "windsurf" "gemini")
                 ;;
             --update)
                 mode="update" ;;
