@@ -4,7 +4,7 @@ set -euo pipefail
 # ─── Contextify Setup Wizard ───
 # Interactive installer that configures Contextify for your AI tools.
 # Usage: ./install.sh                              (interactive wizard)
-#        ./install.sh --tools claude-code,cursor    (non-interactive)
+#        ./install.sh --tools claude-code,codex,cursor (non-interactive)
 #        ./install.sh --all                         (configure all tools)
 #        ./install.sh --status                      (show config status)
 #        ./install.sh --uninstall                   (remove configs)
@@ -136,6 +136,24 @@ check_claude_chat_status() {
     fi
 }
 
+check_codex_status() {
+    local instr_path="${HOME}/.contextify/codex-instructions.md"
+    local has_mcp=false has_instr=false
+
+    if command -v codex &>/dev/null; then
+        codex mcp get contextify --json >/dev/null 2>&1 && has_mcp=true
+    fi
+    [ -f "$instr_path" ] && has_instr=true
+
+    if $has_mcp && $has_instr; then
+        echo "configured"
+    elif $has_mcp || $has_instr; then
+        echo "partial"
+    else
+        echo "not-configured"
+    fi
+}
+
 _status_label() {
     case "$1" in
         configured)     printf '\033[0;32m✓ configured\033[0m' ;;
@@ -258,14 +276,15 @@ SELECTED_TOOLS=()
 interactive_tool_selection() {
     if [ ! -t 0 ]; then
         fail "Interactive mode requires a terminal."
-        fail "Use --tools claude-code,cursor,windsurf,gemini or --all for non-interactive mode."
+        fail "Use --tools claude-code,codex,cursor,windsurf,gemini or --all for non-interactive mode."
         exit 1
     fi
 
-    local claude_status desktop_status chat_status cursor_status windsurf_status gemini_status
+    local claude_status desktop_status chat_status codex_status cursor_status windsurf_status gemini_status
     claude_status=$(check_claude_code_status)
     desktop_status=$(check_claude_desktop_status)
     chat_status=$(check_claude_chat_status)
+    codex_status=$(check_codex_status)
     cursor_status=$(check_cursor_status)
     windsurf_status=$(check_windsurf_status)
     gemini_status=$(check_gemini_status)
@@ -276,9 +295,10 @@ interactive_tool_selection() {
     printf "    [1] Claude Code            "; _status_label "$claude_status"; echo ""
     printf "    [2] Claude Desktop / Cowork "; _status_label "$desktop_status"; echo ""
     printf "    [3] Claude Chat (claude.ai) "; _status_label "$chat_status"; echo ""
-    printf "    [4] Cursor                 "; _status_label "$cursor_status"; echo ""
-    printf "    [5] Windsurf               "; _status_label "$windsurf_status"; echo ""
-    printf "    [6] Gemini                 "; _status_label "$gemini_status"; echo ""
+    printf "    [4] Codex                  "; _status_label "$codex_status"; echo ""
+    printf "    [5] Cursor                 "; _status_label "$cursor_status"; echo ""
+    printf "    [6] Windsurf               "; _status_label "$windsurf_status"; echo ""
+    printf "    [7] Gemini                 "; _status_label "$gemini_status"; echo ""
     echo ""
     echo "    [a] All of the above"
     echo "    [q] Quit"
@@ -293,10 +313,11 @@ interactive_tool_selection() {
             1) SELECTED_TOOLS+=("claude-code") ;;
             2) SELECTED_TOOLS+=("claude-desktop") ;;
             3) SELECTED_TOOLS+=("claude-chat") ;;
-            4) SELECTED_TOOLS+=("cursor") ;;
-            5) SELECTED_TOOLS+=("windsurf") ;;
-            6) SELECTED_TOOLS+=("gemini") ;;
-            a|A|all) SELECTED_TOOLS=("claude-code" "claude-desktop" "claude-chat" "cursor" "windsurf" "gemini"); break ;;
+            4) SELECTED_TOOLS+=("codex") ;;
+            5) SELECTED_TOOLS+=("cursor") ;;
+            6) SELECTED_TOOLS+=("windsurf") ;;
+            7) SELECTED_TOOLS+=("gemini") ;;
+            a|A|all) SELECTED_TOOLS=("claude-code" "claude-desktop" "claude-chat" "codex" "cursor" "windsurf" "gemini"); break ;;
             q|Q|quit) echo ""; info "Setup cancelled."; exit 0 ;;
             *) warn "Unknown selection: $item (ignoring)" ;;
         esac
@@ -597,12 +618,56 @@ CHATEOF
     echo ""
 }
 
+configure_codex() {
+    local force="${1:-false}"
+    info "Configuring Codex..."
+
+    if ! command -v codex &>/dev/null; then
+        warn "Codex CLI not found. Install Codex first, then re-run setup."
+        return 1
+    fi
+
+    if [ "$force" = "true" ]; then
+        codex mcp remove contextify >/dev/null 2>&1 || true
+    fi
+
+    if codex mcp get contextify --json >/dev/null 2>&1; then
+        ok "MCP server already configured in Codex (skipping)"
+    else
+        codex mcp add contextify --url "${CONTEXTIFY_MCP_URL}" >/dev/null
+        ok "Added MCP server to Codex"
+    fi
+
+    local instr_path="${HOME}/.contextify/codex-instructions.md"
+    mkdir -p "${HOME}/.contextify"
+    if [ "$force" = "true" ] || [ ! -f "$instr_path" ]; then
+        if [ -f "${SCRIPT_DIR}/prompts/codex.md" ]; then
+            cp "${SCRIPT_DIR}/prompts/codex.md" "$instr_path"
+        else
+            cat > "$instr_path" << 'CODEXEOF'
+# Contextify Memory System — Codex
+
+1. Call `get_context` at session start with current path as `project_id`.
+2. Call `recall_memories` before deep search/implementation.
+3. Call `store_memory` after bug fixes, commits, and architecture decisions.
+4. Set `agent_source` to "codex".
+CODEXEOF
+        fi
+        ok "Codex instructions saved to ${instr_path}"
+    else
+        ok "Codex instructions already installed (skipping)"
+    fi
+
+    warn "Codex: start a new session to load Contextify MCP tools"
+}
+
 configure_tools() {
     for tool in "${SELECTED_TOOLS[@]}"; do
         case "$tool" in
             claude-code)    configure_claude_code ;;
             claude-desktop) configure_claude_desktop ;;
             claude-chat)    configure_claude_chat ;;
+            codex)          configure_codex ;;
             cursor)         configure_cursor ;;
             windsurf)       configure_windsurf ;;
             gemini)         configure_gemini ;;
@@ -667,10 +732,11 @@ run_self_test() {
 update_tool_configs() {
     info "Updating tool configurations..."
 
-    local claude_status desktop_status chat_status cursor_status windsurf_status gemini_status
+    local claude_status desktop_status chat_status codex_status cursor_status windsurf_status gemini_status
     claude_status=$(check_claude_code_status)
     desktop_status=$(check_claude_desktop_status)
     chat_status=$(check_claude_chat_status)
+    codex_status=$(check_codex_status)
     cursor_status=$(check_cursor_status)
     windsurf_status=$(check_windsurf_status)
     gemini_status=$(check_gemini_status)
@@ -761,6 +827,16 @@ with open('$claude_md', 'w') as f:
         updated=$((updated + 1))
     fi
 
+    if [ "$codex_status" != "not-configured" ]; then
+        if command -v codex &>/dev/null; then
+            configure_codex true 2>/dev/null || true
+            ok "Codex configs updated"
+            updated=$((updated + 1))
+        else
+            warn "Codex appears configured but CLI is missing; skipping Codex update"
+        fi
+    fi
+
     if [ "$updated" -eq 0 ]; then
         info "No configured tools found to update."
     fi
@@ -809,11 +885,13 @@ restart_tools() {
         esac
     done
 
-    # Claude Code is a CLI — can't restart from here, inform user
+    # Claude Code and Codex are CLI/session based — can't restart from here
     for tool in "${SELECTED_TOOLS[@]}"; do
         if [ "$tool" = "claude-code" ]; then
             warn "Claude Code: start a new session to load Contextify MCP tools"
-            break
+        fi
+        if [ "$tool" = "codex" ]; then
+            warn "Codex: start a new session to load Contextify MCP tools"
         fi
     done
 }
@@ -837,6 +915,7 @@ print_summary() {
                 claude-code)    status=$(check_claude_code_status) ;;
                 claude-desktop) status=$(check_claude_desktop_status) ;;
                 claude-chat)    status=$(check_claude_chat_status) ;;
+                codex)          status=$(check_codex_status) ;;
                 cursor)         status=$(check_cursor_status) ;;
                 windsurf)       status=$(check_windsurf_status) ;;
                 gemini)         status=$(check_gemini_status) ;;
@@ -927,7 +1006,14 @@ with open('$claude_md', 'w') as f:
     rm -f "${HOME}/.contextify/gemini-instructions.md" 2>/dev/null || true
     rm -f "${HOME}/.contextify/claude-desktop-instructions.md" 2>/dev/null || true
     rm -f "${HOME}/.contextify/claude-chat-instructions.md" 2>/dev/null || true
+    rm -f "${HOME}/.contextify/codex-instructions.md" 2>/dev/null || true
     rmdir "${HOME}/.contextify" 2>/dev/null || true
+
+    # Codex
+    if command -v codex &>/dev/null; then
+        codex mcp remove contextify >/dev/null 2>&1 || true
+        ok "Removed Codex MCP config"
+    fi
 
     ok "Uninstall complete. Docker container left running (stop with: docker stop contextify)"
 }
@@ -940,14 +1026,14 @@ show_help() {
     echo ""
     echo "  Usage:"
     echo "    ./install.sh                              Interactive setup wizard"
-    echo "    ./install.sh --tools claude-code,cursor    Configure specific tools"
+    echo "    ./install.sh --tools claude-code,codex,cursor Configure specific tools"
     echo "    ./install.sh --all                         Configure all tools"
     echo "    ./install.sh --status                      Show configuration status"
     echo "    ./install.sh --update                      Update to latest version"
     echo "    ./install.sh --uninstall                   Remove all configurations"
     echo "    ./install.sh --help                        Show this help"
     echo ""
-    echo "  Supported tools: claude-code, claude-desktop, claude-chat, cursor, windsurf, gemini"
+    echo "  Supported tools: claude-code, claude-desktop, claude-chat, codex, cursor, windsurf, gemini"
     echo ""
     echo "  Environment variables:"
     echo "    CONTEXTIFY_URL     Server URL (default: http://localhost:8420)"
@@ -972,14 +1058,15 @@ show_status() {
 
     echo ""
     echo "  Tool configurations:"
-    local tools=("claude-code" "claude-desktop" "claude-chat" "cursor" "windsurf" "gemini")
-    local names=("Claude Code" "Claude Desktop" "Claude Chat" "Cursor" "Windsurf" "Gemini")
+    local tools=("claude-code" "claude-desktop" "claude-chat" "codex" "cursor" "windsurf" "gemini")
+    local names=("Claude Code" "Claude Desktop" "Claude Chat" "Codex" "Cursor" "Windsurf" "Gemini")
     for i in "${!tools[@]}"; do
         local status
         case "${tools[$i]}" in
             claude-code)    status=$(check_claude_code_status) ;;
             claude-desktop) status=$(check_claude_desktop_status) ;;
             claude-chat)    status=$(check_claude_chat_status) ;;
+            codex)          status=$(check_codex_status) ;;
             cursor)         status=$(check_cursor_status) ;;
             windsurf)       status=$(check_windsurf_status) ;;
             gemini)         status=$(check_gemini_status) ;;
@@ -1018,14 +1105,14 @@ main() {
                 # Validate tool names
                 for tool in "${SELECTED_TOOLS[@]}"; do
                     case "$tool" in
-                        claude-code|claude-desktop|claude-chat|cursor|windsurf|gemini) ;;
-                        *) fail "Unknown tool: $tool. Valid: claude-code, claude-desktop, claude-chat, cursor, windsurf, gemini"; exit 1 ;;
+                        claude-code|claude-desktop|claude-chat|codex|cursor|windsurf|gemini) ;;
+                        *) fail "Unknown tool: $tool. Valid: claude-code, claude-desktop, claude-chat, codex, cursor, windsurf, gemini"; exit 1 ;;
                     esac
                 done
                 ;;
             --all)
                 mode="non-interactive"
-                SELECTED_TOOLS=("claude-code" "claude-desktop" "claude-chat" "cursor" "windsurf" "gemini")
+                SELECTED_TOOLS=("claude-code" "claude-desktop" "claude-chat" "codex" "cursor" "windsurf" "gemini")
                 ;;
             --update)
                 mode="update" ;;

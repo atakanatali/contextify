@@ -43,7 +43,7 @@ func runUpdate(cmd *cobra.Command, args []string, currentVersion string) error {
 	if !skipConfirm {
 		fmt.Println()
 		printWarn("Updating will restart the Contextify server.")
-		printWarn("Active AI agent sessions (Claude Code, Cursor, etc.) will lose their MCP connection.")
+		printWarn("Active AI agent sessions (Claude Code, Codex, Cursor, etc.) will lose their MCP connection.")
 		printWarn("You will need to start a new session after the update.")
 		fmt.Println()
 		fmt.Print("  Continue? [y/N] ")

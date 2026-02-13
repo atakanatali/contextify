@@ -21,6 +21,9 @@ func RestartTool(tool ToolName) error {
 	case ToolClaudeChat:
 		// Web-based, no restart needed
 		return nil
+	case ToolCodex:
+		// Codex is CLI/desktop session based; start a new session manually
+		return nil
 	case ToolGemini:
 		// API-based, no restart needed
 		return nil
@@ -37,6 +40,8 @@ func IsToolRunning(tool ToolName) bool {
 		return isProcessRunning("Windsurf")
 	case ToolClaudeDesktop:
 		return isProcessRunning("Claude")
+	case ToolCodex:
+		return false
 	default:
 		return false
 	}
