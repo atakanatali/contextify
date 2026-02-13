@@ -2,6 +2,7 @@ package toolconfig
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -36,6 +37,11 @@ func DetectInstalledTools() []ToolName {
 	// Claude Chat: always available (remote MCP via claude.ai UI)
 	installed = append(installed, ToolClaudeChat)
 
+	// Codex: check if codex binary or ~/.codex directory exists.
+	if _, err := exec.LookPath("codex"); err == nil || dirExists(expandPath("~/.codex")) {
+		installed = append(installed, ToolCodex)
+	}
+
 	// Cursor: check if ~/.cursor/ exists
 	if dirExists(expandPath("~/.cursor")) {
 		installed = append(installed, ToolCursor)
@@ -61,6 +67,8 @@ func CheckStatus(tool ToolName) ToolStatus {
 		return checkClaudeDesktopStatus()
 	case ToolClaudeChat:
 		return checkClaudeChatStatus()
+	case ToolCodex:
+		return checkCodexStatus()
 	case ToolCursor:
 		return checkCursorStatus()
 	case ToolWindsurf:
@@ -102,6 +110,8 @@ func UpdateConfiguredTools(mcpURL string) ([]ToolName, error) {
 			err = UpdateClaudeDesktop(mcpURL)
 		case ToolClaudeChat:
 			err = UpdateClaudeChat(mcpURL)
+		case ToolCodex:
+			err = UpdateCodex(mcpURL)
 		case ToolCursor:
 			err = UpdateCursor(mcpURL)
 		case ToolWindsurf:
@@ -176,6 +186,20 @@ func checkGeminiStatus() ToolStatus {
 	instrPath := expandPath("~/.contextify/gemini-instructions.md")
 	if fileExists(instrPath) {
 		return StatusConfigured
+	}
+	return StatusNotConfigured
+}
+
+func checkCodexStatus() ToolStatus {
+	instrPath := expandPath("~/.contextify/codex-instructions.md")
+	hasInstr := fileExists(instrPath)
+	hasMCP := codexHasContextifyMCP()
+
+	if hasMCP && hasInstr {
+		return StatusConfigured
+	}
+	if hasMCP || hasInstr {
+		return StatusPartial
 	}
 	return StatusNotConfigured
 }

@@ -19,14 +19,14 @@
   </a>
 </p>
 
-Unified memory system for AI agents. Provides shared short-term and long-term memory across Claude Code, Cursor, Windsurf, Gemini, and any other AI tool.
+Unified memory system for AI agents. Provides shared short-term and long-term memory across Claude Code, Codex, Cursor, Windsurf, Gemini, and any other AI tool.
 
 **Key features:**
 - **Smart Store** — automatic deduplication with similarity-based merge (>= 0.92 auto-merge, 0.75-0.92 suggest)
 - **Project ID Normalization** — VCS-agnostic canonical names (worktrees, different machines, renames all resolve to the same identity)
 - **Semantic + Keyword Search** — hybrid search with pgvector HNSW + full-text (70/30 weighting)
 - **Memory Consolidation** — merge strategies (latest_wins, append, smart_merge), background dedup scanner, Web UI review
-- **Multi-Agent** — MCP for Claude Code/Cursor/Windsurf, REST API for Gemini and others
+- **Multi-Agent** — MCP for Claude Code/Codex/Cursor/Windsurf, REST API for Gemini and others
 
 <img width="3004" height="1437" alt="image" src="https://github.com/user-attachments/assets/939ef56d-9fcc-4c8b-a85b-29f9de4256e5" />
 
@@ -36,6 +36,7 @@ Unified memory system for AI agents. Provides shared short-term and long-term me
 graph TB
     subgraph Agents["AI Agents"]
         CC[Claude Code]
+        CX[Codex]
         CU[Cursor]
         WS[Windsurf]
         GE[Gemini]
@@ -55,7 +56,7 @@ graph TB
         OL[Ollama Embeddings]
     end
 
-    CC & CU & WS -->|MCP| MCP
+    CC & CX & CU & WS -->|MCP| MCP
     GE -->|REST| REST
     WEB -.-> REST
     MCP & REST --> SVC
@@ -85,7 +86,7 @@ contextify install
 
 The install wizard will:
 1. Pull and start the Docker container (PostgreSQL + Ollama + server + Web UI)
-2. Ask which tools to configure: **Claude Code**, **Cursor**, **Windsurf**, **Gemini**
+2. Ask which tools to configure: **Claude Code**, **Codex**, **Cursor**, **Windsurf**, **Gemini**
 3. Set up MCP/REST integration, hooks, and prompt rules for each selected tool
 4. Run a self-test to verify everything works
 
@@ -100,9 +101,10 @@ The install wizard will:
   Select AI tools to configure:
 
   ✓ 1) Claude Code
-  ○ 2) Cursor
-  ○ 3) Windsurf
-  ✓ 4) Gemini
+  ○ 2) Codex
+  ○ 3) Cursor
+  ○ 4) Windsurf
+  ✓ 5) Gemini
 
   Enter numbers separated by spaces (e.g., 1 2 3), or 'all':
 ```
@@ -143,7 +145,7 @@ cat error.log | contextify store "Error log" --type error
 ### Non-interactive install
 
 ```bash
-contextify install --tools claude-code,cursor    # Specific tools
+contextify install --tools claude-code,codex,cursor # Specific tools
 contextify install --all                         # All detected tools
 contextify install --all --no-test               # Skip self-test
 ```
@@ -209,6 +211,18 @@ Add to `~/.claude/settings.json`:
   }
 }
 ```
+
+### Codex
+
+Use Codex MCP commands:
+
+```bash
+codex mcp add contextify --url http://localhost:8420/mcp
+codex mcp list
+```
+
+The installer also writes Codex instructions to:
+- `~/.contextify/codex-instructions.md`
 
 ### Cursor
 
