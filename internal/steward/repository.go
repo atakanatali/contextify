@@ -455,7 +455,7 @@ func (r *Repository) ListRuns(ctx context.Context, f RunFilters) ([]Run, error) 
 	}
 	args = append(args, f.Limit, f.Offset)
 	query := fmt.Sprintf(`
-		SELECT r.id, r.job_id, r.provider, r.model, r.input_snapshot, r.output_snapshot, r.input_hash,
+		SELECT r.id, r.job_id, j.job_type, j.project_id, j.status, r.provider, r.model, r.input_snapshot, r.output_snapshot, r.input_hash,
 		       r.prompt_tokens, r.completion_tokens, r.total_tokens, r.latency_ms, r.status,
 		       r.error_class, r.error_message, r.created_at, r.completed_at
 		FROM steward_runs r
@@ -473,7 +473,7 @@ func (r *Repository) ListRuns(ctx context.Context, f RunFilters) ([]Run, error) 
 	for rows.Next() {
 		var run Run
 		var inJSON, outJSON []byte
-		if err := rows.Scan(&run.ID, &run.JobID, &run.Provider, &run.Model, &inJSON, &outJSON, &run.InputHash,
+		if err := rows.Scan(&run.ID, &run.JobID, &run.JobType, &run.ProjectID, &run.JobStatus, &run.Provider, &run.Model, &inJSON, &outJSON, &run.InputHash,
 			&run.PromptTokens, &run.CompletionTokens, &run.TotalTokens, &run.LatencyMs, &run.Status,
 			&run.ErrorClass, &run.ErrorMessage, &run.CreatedAt, &run.CompletedAt); err != nil {
 			return nil, fmt.Errorf("scan steward run: %w", err)
