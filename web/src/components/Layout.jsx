@@ -7,6 +7,7 @@ const navItems = [
   { to: '/search', label: 'Search', icon: '🔍' },
   { to: '/consolidation', label: 'Consolidation', icon: '🔗' },
   { to: '/analytics', label: 'Analytics', icon: '📊' },
+  { to: '/steward', label: 'Steward', icon: '🛠️' },
 ]
 
 export default function Layout() {

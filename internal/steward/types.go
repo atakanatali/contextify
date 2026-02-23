@@ -42,6 +42,9 @@ type Job struct {
 type Run struct {
 	ID               uuid.UUID
 	JobID            *uuid.UUID
+	JobType          *string
+	ProjectID        *string
+	JobStatus        *string
 	Provider         *string
 	Model            *string
 	InputSnapshot    map[string]any

@@ -110,4 +110,43 @@ export const api = {
       limit: String(limit),
       offset: String(offset),
     })}`),
+
+  getStewardStatus: () => request('/steward/status'),
+
+  getStewardMetrics: () => request('/steward/metrics'),
+
+  getStewardRuns: ({
+    status,
+    jobType,
+    projectId,
+    model,
+    limit = 50,
+    offset = 0,
+  } = {}) =>
+    request(`/steward/runs?${new URLSearchParams({
+      ...(status && { status }),
+      ...(jobType && { job_type: jobType }),
+      ...(projectId && { project_id: projectId }),
+      ...(model && { model }),
+      limit: String(limit),
+      offset: String(offset),
+    })}`),
+
+  getStewardJobEvents: (jobId, { limit = 200, offset = 0 } = {}) =>
+    request(`/steward/jobs/${jobId}/events?${new URLSearchParams({
+      limit: String(limit),
+      offset: String(offset),
+    })}`),
+
+  triggerStewardRunOnce: () =>
+    request('/steward/run-once', { method: 'POST' }),
+
+  updateStewardMode: (data) =>
+    request('/steward/mode', { method: 'PUT', body: JSON.stringify(data) }),
+
+  retryStewardJob: (jobId) =>
+    request(`/steward/jobs/${jobId}/retry`, { method: 'POST' }),
+
+  cancelStewardJob: (jobId) =>
+    request(`/steward/jobs/${jobId}/cancel`, { method: 'POST' }),
 }

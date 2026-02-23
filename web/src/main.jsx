@@ -9,6 +9,7 @@ import MemoryBrowser from './pages/MemoryBrowser'
 import Search from './pages/Search'
 import Consolidation from './pages/Consolidation'
 import Analytics from './pages/Analytics'
+import Steward from './pages/Steward'
 import EmptyState from './components/EmptyState'
 
 function NotFound() {
@@ -26,6 +27,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/search" element={<Search />} />
             <Route path="/consolidation" element={<Consolidation />} />
             <Route path="/analytics" element={<Analytics />} />
+            <Route path="/steward" element={<Steward />} />
             <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>
