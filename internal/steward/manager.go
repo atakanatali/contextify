@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/atakanatali/contextify/internal/config"
@@ -33,6 +34,7 @@ type Manager struct {
 	lockConn *pgxpool.Conn
 	leader   bool
 	workerID string
+	paused   bool
 }
 
 func NewManager(pool *pgxpool.Pool, svc *memory.Service, cfg config.StewardConfig, embeddingOllamaURL string) *Manager {
@@ -105,6 +107,12 @@ func (m *Manager) loop(ctx context.Context) {
 }
 
 func (m *Manager) tick(ctx context.Context, leaseDuration time.Duration) error {
+	m.mu.Lock()
+	paused := m.paused
+	m.mu.Unlock()
+	if paused {
+		return nil
+	}
 	if !m.isLeader() {
 		if err := m.tryBecomeLeader(ctx); err != nil {
 			return err
@@ -258,6 +266,72 @@ func (m *Manager) isLeader() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.leader
+}
+
+type Status struct {
+	Enabled      bool          `json:"enabled"`
+	DryRun       bool          `json:"dry_run"`
+	Paused       bool          `json:"paused"`
+	IsLeader     bool          `json:"is_leader"`
+	WorkerID     string        `json:"worker_id"`
+	TickInterval time.Duration `json:"tick_interval"`
+	Model        string        `json:"model"`
+}
+
+func (m *Manager) GetStatus() Status {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return Status{
+		Enabled:      m.cfg.Enabled,
+		DryRun:       m.cfg.DryRun,
+		Paused:       m.paused,
+		IsLeader:     m.leader,
+		WorkerID:     m.workerID,
+		TickInterval: m.cfg.TickInterval,
+		Model:        m.cfg.Model,
+	}
+}
+
+func (m *Manager) SetMode(paused, dryRun bool) Status {
+	m.mu.Lock()
+	m.paused = paused
+	m.cfg.DryRun = dryRun
+	m.mu.Unlock()
+	return m.GetStatus()
+}
+
+func (m *Manager) RunOnce(ctx context.Context) error {
+	return m.tick(ctx, maxDuration(m.cfg.RequestTimeout*2, 30*time.Second))
+}
+
+func (m *Manager) ListRuns(ctx context.Context, f RunFilters) ([]Run, error) {
+	return m.repo.ListRuns(ctx, f)
+}
+
+func (m *Manager) ListEventsByJob(ctx context.Context, jobID uuid.UUID, limit, offset int) ([]Event, error) {
+	return m.repo.ListEventsByJob(ctx, jobID, limit, offset)
+}
+
+func (m *Manager) Metrics(ctx context.Context) (*MetricsSummary, error) {
+	return m.repo.GetMetricsSummary(ctx)
+}
+
+func (m *Manager) RetryJob(ctx context.Context, id uuid.UUID) error {
+	_, err := m.pool.Exec(ctx, `
+		UPDATE steward_jobs
+		SET status = 'queued', run_after = NOW(), locked_by = NULL, locked_at = NULL, lease_expires_at = NULL, updated_at = NOW()
+		WHERE id = $1 AND status IN ('failed','dead_letter','cancelled')
+	`, id)
+	return err
+}
+
+func (m *Manager) CancelJob(ctx context.Context, id uuid.UUID) error {
+	_, err := m.pool.Exec(ctx, `
+		UPDATE steward_jobs
+		SET status = 'cancelled', cancelled_at = NOW(), locked_by = NULL, locked_at = NULL, lease_expires_at = NULL, updated_at = NOW()
+		WHERE id = $1 AND status IN ('queued','running')
+	`, id)
+	return err
 }
 
 func maxDuration(a, b time.Duration) time.Duration {

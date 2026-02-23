@@ -103,7 +103,7 @@ func main() {
 	mcpServer := mcp.NewServer(svc)
 
 	// Create REST API router
-	apiRouter := api.NewRouter(svc)
+	apiRouter := api.NewRouter(svc, stewardMgr)
 
 	// Combined HTTP server
 	mux := http.NewServeMux()

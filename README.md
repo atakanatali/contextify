@@ -305,6 +305,15 @@ GET    /api/v1/consolidation/suggestions      Pending merge suggestions
 PUT    /api/v1/consolidation/suggestions/:id  Accept/reject suggestion
 GET    /api/v1/consolidation/log              Consolidation audit log
 
+GET    /api/v1/steward/status                 Steward runtime status/mode
+GET    /api/v1/steward/runs                   Steward runs (filters + pagination)
+GET    /api/v1/steward/jobs/:id/events        Steward job event timeline
+GET    /api/v1/steward/metrics                Steward aggregate metrics (UI KPIs)
+POST   /api/v1/steward/run-once               Trigger one steward tick
+PUT    /api/v1/steward/mode                   Update paused/dry-run mode
+POST   /api/v1/steward/jobs/:id/retry         Retry failed/dead-letter steward job
+POST   /api/v1/steward/jobs/:id/cancel        Cancel queued/running steward job
+
 POST   /api/v1/admin/normalize-projects       Trigger project ID normalization
 ```
 
