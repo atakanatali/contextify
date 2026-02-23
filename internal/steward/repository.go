@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -267,11 +268,17 @@ func scanJob(rows pgx.Row) (*Job, error) {
 
 func (r *Repository) CreateRun(ctx context.Context, job Job, provider, model string) (*Run, error) {
 	run := &Run{
-		ID:            uuid.New(),
-		JobID:         &job.ID,
-		InputSnapshot: map[string]any{"job_type": job.JobType, "project_id": job.ProjectID},
-		Status:        string(JobRunning),
-		CreatedAt:     time.Now().UTC(),
+		ID:    uuid.New(),
+		JobID: &job.ID,
+		InputSnapshot: map[string]any{
+			"schema_version":    1,
+			"job_type":          job.JobType,
+			"project_id":        job.ProjectID,
+			"payload":           job.Payload,
+			"source_memory_ids": job.SourceMemoryIDs,
+		},
+		Status:    string(JobRunning),
+		CreatedAt: time.Now().UTC(),
 	}
 	if provider != "" {
 		run.Provider = &provider
@@ -312,6 +319,12 @@ func (r *Repository) MarkSucceeded(ctx context.Context, job Job, run *Run, resul
 	output := result.Output
 	if output == nil {
 		output = map[string]any{}
+	}
+	if result.SideEffects != nil {
+		output["side_effects"] = result.SideEffects
+	}
+	if result.Decision != "" {
+		output["decision"] = result.Decision
 	}
 	outJSON, _ := json.Marshal(output)
 	_, err := r.pool.Exec(ctx, `
@@ -404,4 +417,161 @@ func nullableString(v string) *string {
 		return nil
 	}
 	return &v
+}
+
+func (r *Repository) ListRuns(ctx context.Context, f RunFilters) ([]Run, error) {
+	conditions := []string{}
+	args := []any{}
+	arg := 1
+	if f.Status != nil {
+		conditions = append(conditions, fmt.Sprintf("r.status = $%d", arg))
+		args = append(args, *f.Status)
+		arg++
+	}
+	if f.JobType != nil {
+		conditions = append(conditions, fmt.Sprintf("j.job_type = $%d", arg))
+		args = append(args, *f.JobType)
+		arg++
+	}
+	if f.ProjectID != nil {
+		conditions = append(conditions, fmt.Sprintf("j.project_id = $%d", arg))
+		args = append(args, *f.ProjectID)
+		arg++
+	}
+	if f.Model != nil {
+		conditions = append(conditions, fmt.Sprintf("r.model = $%d", arg))
+		args = append(args, *f.Model)
+		arg++
+	}
+	where := ""
+	if len(conditions) > 0 {
+		where = "WHERE " + strings.Join(conditions, " AND ")
+	}
+	if f.Limit <= 0 {
+		f.Limit = 50
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+	args = append(args, f.Limit, f.Offset)
+	query := fmt.Sprintf(`
+		SELECT r.id, r.job_id, r.provider, r.model, r.input_snapshot, r.output_snapshot, r.input_hash,
+		       r.prompt_tokens, r.completion_tokens, r.total_tokens, r.latency_ms, r.status,
+		       r.error_class, r.error_message, r.created_at, r.completed_at
+		FROM steward_runs r
+		LEFT JOIN steward_jobs j ON j.id = r.job_id
+		%s
+		ORDER BY r.created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, where, arg, arg+1)
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list steward runs: %w", err)
+	}
+	defer rows.Close()
+	var out []Run
+	for rows.Next() {
+		var run Run
+		var inJSON, outJSON []byte
+		if err := rows.Scan(&run.ID, &run.JobID, &run.Provider, &run.Model, &inJSON, &outJSON, &run.InputHash,
+			&run.PromptTokens, &run.CompletionTokens, &run.TotalTokens, &run.LatencyMs, &run.Status,
+			&run.ErrorClass, &run.ErrorMessage, &run.CreatedAt, &run.CompletedAt); err != nil {
+			return nil, fmt.Errorf("scan steward run: %w", err)
+		}
+		_ = json.Unmarshal(inJSON, &run.InputSnapshot)
+		_ = json.Unmarshal(outJSON, &run.OutputSnapshot)
+		out = append(out, run)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) ListEventsByJob(ctx context.Context, jobID uuid.UUID, limit, offset int) ([]Event, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, job_id, run_id, event_type, data, schema_version, created_at
+		FROM steward_events
+		WHERE job_id = $1
+		ORDER BY created_at ASC
+		LIMIT $2 OFFSET $3
+	`, jobID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list steward events: %w", err)
+	}
+	defer rows.Close()
+	var events []Event
+	for rows.Next() {
+		var e Event
+		var data []byte
+		if err := rows.Scan(&e.ID, &e.JobID, &e.RunID, &e.EventType, &data, &e.SchemaVersion, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan steward event: %w", err)
+		}
+		_ = json.Unmarshal(data, &e.Data)
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
+func (r *Repository) GetMetricsSummary(ctx context.Context) (*MetricsSummary, error) {
+	out := &MetricsSummary{}
+	if err := r.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM steward_runs WHERE created_at >= NOW() - INTERVAL '1 hour'
+	`).Scan(&out.RunsLastHour); err != nil {
+		return nil, fmt.Errorf("count steward runs last hour: %w", err)
+	}
+	var successCount, totalCount int64
+	if err := r.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FILTER (WHERE status = 'succeeded'),
+		       COUNT(*)
+		FROM steward_runs
+		WHERE created_at >= NOW() - INTERVAL '24 hour'
+	`).Scan(&successCount, &totalCount); err != nil {
+		return nil, fmt.Errorf("compute steward success rate: %w", err)
+	}
+	if totalCount > 0 {
+		out.SuccessRate = float64(successCount) / float64(totalCount)
+	}
+	if err := r.pool.QueryRow(ctx, `
+		SELECT COALESCE(AVG(total_tokens), 0)
+		FROM steward_runs
+		WHERE total_tokens IS NOT NULL
+		  AND created_at >= NOW() - INTERVAL '24 hour'
+	`).Scan(&out.AverageTokensPerRun); err != nil {
+		return nil, fmt.Errorf("avg steward tokens: %w", err)
+	}
+	if err := r.pool.QueryRow(ctx, `
+		SELECT COALESCE((
+			SELECT percentile_disc(0.95) WITHIN GROUP (ORDER BY latency_ms)
+			FROM steward_runs
+			WHERE latency_ms IS NOT NULL
+			  AND created_at >= NOW() - INTERVAL '24 hour'
+		), 0)
+	`).Scan(&out.P95LatencyMs); err != nil {
+		return nil, fmt.Errorf("p95 steward latency: %w", err)
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT COALESCE(error_class, 'unknown') AS reason, COUNT(*) AS c
+		FROM steward_runs
+		WHERE status = 'failed'
+		  AND created_at >= NOW() - INTERVAL '24 hour'
+		GROUP BY 1
+		ORDER BY c DESC
+		LIMIT 5
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("top steward failures: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var fb FailureBreakdown
+		if err := rows.Scan(&fb.Reason, &fb.Count); err != nil {
+			return nil, fmt.Errorf("scan steward failure breakdown: %w", err)
+		}
+		out.TopFailureReasons = append(out.TopFailureReasons, fb)
+	}
+	return out, rows.Err()
 }
