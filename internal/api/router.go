@@ -10,10 +10,11 @@ import (
 	"github.com/go-chi/cors"
 
 	"github.com/atakanatali/contextify/internal/memory"
+	"github.com/atakanatali/contextify/internal/steward"
 )
 
-func NewRouter(svc *memory.Service) *chi.Mux {
-	h := NewHandlers(svc)
+func NewRouter(svc *memory.Service, stewardMgr *steward.Manager) *chi.Mux {
+	h := NewHandlers(svc, stewardMgr)
 
 	r := chi.NewRouter()
 
@@ -72,6 +73,16 @@ func NewRouter(svc *memory.Service) *chi.Mux {
 
 		// Admin
 		r.Post("/admin/normalize-projects", h.NormalizeProjects)
+
+		// Steward
+		r.Get("/steward/status", h.GetStewardStatus)
+		r.Get("/steward/runs", h.GetStewardRuns)
+		r.Get("/steward/jobs/{id}/events", h.GetStewardJobEvents)
+		r.Get("/steward/metrics", h.GetStewardMetrics)
+		r.Post("/steward/run-once", h.StewardRunOnce)
+		r.Put("/steward/mode", h.UpdateStewardMode)
+		r.Post("/steward/jobs/{id}/retry", h.RetryStewardJob)
+		r.Post("/steward/jobs/{id}/cancel", h.CancelStewardJob)
 	})
 
 	// Serve embedded Web UI static files (SPA with fallback to index.html)

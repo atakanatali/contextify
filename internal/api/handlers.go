@@ -11,14 +11,16 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/atakanatali/contextify/internal/memory"
+	"github.com/atakanatali/contextify/internal/steward"
 )
 
 type Handlers struct {
-	svc *memory.Service
+	svc        *memory.Service
+	stewardMgr *steward.Manager
 }
 
-func NewHandlers(svc *memory.Service) *Handlers {
-	return &Handlers{svc: svc}
+func NewHandlers(svc *memory.Service, stewardMgr *steward.Manager) *Handlers {
+	return &Handlers{svc: svc, stewardMgr: stewardMgr}
 }
 
 // POST /api/v1/memories
@@ -504,6 +506,170 @@ func (h *Handlers) NormalizeProjects(w http.ResponseWriter, r *http.Request) {
 		"updated": updated,
 		"message": "project_id normalization complete",
 	})
+}
+
+type stewardModeRequest struct {
+	Paused bool `json:"paused"`
+	DryRun bool `json:"dry_run"`
+}
+
+func (h *Handlers) requireSteward(w http.ResponseWriter) bool {
+	if h.stewardMgr == nil {
+		writeError(w, http.StatusNotFound, "steward not configured")
+		return false
+	}
+	return true
+}
+
+func (h *Handlers) GetStewardStatus(w http.ResponseWriter, r *http.Request) {
+	if !h.requireSteward(w) {
+		return
+	}
+	writeJSON(w, http.StatusOK, h.stewardMgr.GetStatus())
+}
+
+func (h *Handlers) GetStewardRuns(w http.ResponseWriter, r *http.Request) {
+	if !h.requireSteward(w) {
+		return
+	}
+	var f steward.RunFilters
+	if v := r.URL.Query().Get("status"); v != "" {
+		f.Status = &v
+	}
+	if v := r.URL.Query().Get("job_type"); v != "" {
+		f.JobType = &v
+	}
+	if v := r.URL.Query().Get("project_id"); v != "" {
+		f.ProjectID = &v
+	}
+	if v := r.URL.Query().Get("model"); v != "" {
+		f.Model = &v
+	}
+	f.Limit = 50
+	f.Offset = 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 || n > 500 {
+			writeError(w, http.StatusBadRequest, "limit must be between 1 and 500")
+			return
+		}
+		f.Limit = n
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "offset must be >= 0")
+			return
+		}
+		f.Offset = n
+	}
+	runs, err := h.stewardMgr.ListRuns(r.Context(), f)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": runs, "limit": f.Limit, "offset": f.Offset})
+}
+
+func (h *Handlers) GetStewardJobEvents(w http.ResponseWriter, r *http.Request) {
+	if !h.requireSteward(w) {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid job id")
+		return
+	}
+	limit, offset := 200, 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 || n > 1000 {
+			writeError(w, http.StatusBadRequest, "limit must be between 1 and 1000")
+			return
+		}
+		limit = n
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "offset must be >= 0")
+			return
+		}
+		offset = n
+	}
+	events, err := h.stewardMgr.ListEventsByJob(r.Context(), id, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events, "limit": limit, "offset": offset})
+}
+
+func (h *Handlers) GetStewardMetrics(w http.ResponseWriter, r *http.Request) {
+	if !h.requireSteward(w) {
+		return
+	}
+	m, err := h.stewardMgr.Metrics(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, m)
+}
+
+func (h *Handlers) StewardRunOnce(w http.ResponseWriter, r *http.Request) {
+	if !h.requireSteward(w) {
+		return
+	}
+	if err := h.stewardMgr.RunOnce(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "triggered"})
+}
+
+func (h *Handlers) UpdateStewardMode(w http.ResponseWriter, r *http.Request) {
+	if !h.requireSteward(w) {
+		return
+	}
+	var req stewardModeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, h.stewardMgr.SetMode(req.Paused, req.DryRun))
+}
+
+func (h *Handlers) RetryStewardJob(w http.ResponseWriter, r *http.Request) {
+	if !h.requireSteward(w) {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid job id")
+		return
+	}
+	if err := h.stewardMgr.RetryJob(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "queued", "id": id.String()})
+}
+
+func (h *Handlers) CancelStewardJob(w http.ResponseWriter, r *http.Request) {
+	if !h.requireSteward(w) {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid job id")
+		return
+	}
+	if err := h.stewardMgr.CancelJob(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled", "id": id.String()})
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
