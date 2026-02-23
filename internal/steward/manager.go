@@ -30,12 +30,25 @@ type Manager struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	mu             sync.Mutex
-	lockConn       *pgxpool.Conn
-	leader         bool
-	workerID       string
-	paused         bool
-	lastPolicyEval time.Time
+	mu                        sync.Mutex
+	lockConn                  *pgxpool.Conn
+	leader                    bool
+	workerID                  string
+	paused                    bool
+	lastPolicyEval            time.Time
+	health                    QueueHealthSummary
+	startupRecoveredStaleJobs int64
+	breaker                   circuitBreakerState
+}
+
+type circuitBreakerState struct {
+	Open                bool       `json:"open"`
+	Reason              string     `json:"reason,omitempty"`
+	OpenedAt            *time.Time `json:"opened_at,omitempty"`
+	CooldownUntil       *time.Time `json:"cooldown_until,omitempty"`
+	ConsecutiveFailures int        `json:"consecutive_failures"`
+	LastFailure         *time.Time `json:"last_failure,omitempty"`
+	LastProbeSuccessAt  *time.Time `json:"last_probe_success_at,omitempty"`
 }
 
 func NewManager(pool *pgxpool.Pool, svc *memory.Service, cfg config.StewardConfig, embeddingOllamaURL string) *Manager {
@@ -63,7 +76,7 @@ func (m *Manager) Start() {
 	if m.cfg.LLMConflictGuardEnabled {
 		llmClient = stewardllm.NewClient(m.ollamaURL, m.cfg.Model)
 	}
-	m.registry.Register("auto_merge_from_suggestion", NewAutoMergeSuggestionExecutor(m.repo, m.svc, m.cfg.DryRun, llmClient))
+	m.registry.Register("auto_merge_from_suggestion", NewAutoMergeSuggestionExecutorWithGuard(m.repo, m.svc, m.cfg.DryRun, llmClient, m.llmAllowed))
 	m.registry.Register("derive_memories", NewDerivationExecutorFromPtr(m.repo, m.svc, &m.cfg.Derivation))
 	m.registry.Register("policy_tune", NewPolicyTuneExecutor(m))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -92,6 +105,9 @@ func (m *Manager) loop(ctx context.Context) {
 	_ = m.tryBecomeLeader(ctx)
 	if m.isLeader() {
 		if n, err := m.repo.RecoverStaleRunningJobs(ctx, time.Now().UTC()); err == nil && n > 0 {
+			m.mu.Lock()
+			m.startupRecoveredStaleJobs = n
+			m.mu.Unlock()
 			slog.Info("steward recovered stale jobs", "count", n)
 		}
 	}
@@ -125,7 +141,8 @@ func (m *Manager) tick(ctx context.Context, leaseDuration time.Duration) error {
 	}
 
 	if m.cfg.AutoMergeFromSuggestions {
-		if n, err := m.repo.EnqueueAutoMergeSuggestionJobs(ctx, m.cfg.AutoMergeThreshold, m.cfg.MaxAttempts, m.cfg.ClaimBatchSize*4); err != nil {
+		maxQueuedTotal, maxQueuedPerProject := m.queueLimits()
+		if n, err := m.repo.EnqueueAutoMergeSuggestionJobsWithBackpressure(ctx, m.cfg.AutoMergeThreshold, m.cfg.MaxAttempts, m.cfg.ClaimBatchSize*4, maxQueuedTotal, maxQueuedPerProject); err != nil {
 			slog.Warn("failed to enqueue auto-merge suggestion jobs", "error", err)
 		} else if n > 0 {
 			slog.Debug("enqueued auto-merge suggestion jobs", "count", n)
@@ -136,13 +153,19 @@ func (m *Manager) tick(ctx context.Context, leaseDuration time.Duration) error {
 		due := m.lastPolicyEval.IsZero() || time.Since(m.lastPolicyEval) >= m.cfg.SelfLearn.EvalInterval
 		m.mu.Unlock()
 		if due {
-			key := "steward:policy_tune:" + time.Now().UTC().Truncate(m.cfg.SelfLearn.EvalInterval).Format(time.RFC3339)
-			if err := m.repo.EnqueuePolicyTuneJob(ctx, m.cfg.MaxAttempts, key); err != nil {
-				slog.Warn("failed to enqueue policy_tune job", "error", err)
+			if totalQueued, err := m.repo.CountQueuedJobs(ctx); err != nil {
+				slog.Warn("failed to evaluate queue depth before policy_tune enqueue", "error", err)
+			} else if totalQueued >= int64(m.maxQueuedTotal()) {
+				slog.Warn("skipping policy_tune enqueue due to backpressure", "queued_total", totalQueued, "max_queued_total", m.maxQueuedTotal())
 			} else {
-				m.mu.Lock()
-				m.lastPolicyEval = time.Now().UTC()
-				m.mu.Unlock()
+				key := "steward:policy_tune:" + time.Now().UTC().Truncate(m.cfg.SelfLearn.EvalInterval).Format(time.RFC3339)
+				if err := m.repo.EnqueuePolicyTuneJob(ctx, m.cfg.MaxAttempts, key); err != nil {
+					slog.Warn("failed to enqueue policy_tune job", "error", err)
+				} else {
+					m.mu.Lock()
+					m.lastPolicyEval = time.Now().UTC()
+					m.mu.Unlock()
+				}
 			}
 		}
 	}
@@ -151,11 +174,13 @@ func (m *Manager) tick(ctx context.Context, leaseDuration time.Duration) error {
 	if err != nil {
 		return err
 	}
+	_ = m.refreshHealthSnapshot(ctx)
 	for _, job := range jobs {
 		if err := m.executeJob(ctx, job); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Warn("steward job execution failed", "job_id", job.ID, "job_type", job.JobType, "error", err)
 		}
 	}
+	_ = m.refreshHealthSnapshot(ctx)
 	return nil
 }
 
@@ -184,6 +209,7 @@ func (m *Manager) executeJob(parent context.Context, job Job) error {
 	latencyMs := int(time.Since(start).Milliseconds())
 
 	if execErr != nil {
+		m.recordExecutionFailure(job, execErr)
 		status, runAfter, markErr := m.repo.MarkFailure(jobCtx, job, run, execErr, true)
 		if markErr != nil {
 			return markErr
@@ -191,6 +217,7 @@ func (m *Manager) executeJob(parent context.Context, job Job) error {
 		_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "job_failed", map[string]any{"status": status, "requeued_for": runAfter})
 		return execErr
 	}
+	m.recordExecutionSuccess(job, result)
 	if result == nil {
 		result = &ExecutionResult{Status: JobSucceeded, Decision: "empty_result", Output: map[string]any{}}
 	}
@@ -286,26 +313,37 @@ func (m *Manager) isLeader() bool {
 }
 
 type Status struct {
-	Enabled      bool          `json:"enabled"`
-	DryRun       bool          `json:"dry_run"`
-	Paused       bool          `json:"paused"`
-	IsLeader     bool          `json:"is_leader"`
-	WorkerID     string        `json:"worker_id"`
-	TickInterval time.Duration `json:"tick_interval"`
-	Model        string        `json:"model"`
+	Enabled                   bool                `json:"enabled"`
+	DryRun                    bool                `json:"dry_run"`
+	Paused                    bool                `json:"paused"`
+	IsLeader                  bool                `json:"is_leader"`
+	WorkerID                  string              `json:"worker_id"`
+	TickInterval              time.Duration       `json:"tick_interval"`
+	Model                     string              `json:"model"`
+	Health                    QueueHealthSummary  `json:"health"`
+	StartupRecoveredStaleJobs int64               `json:"startup_recovered_stale_jobs"`
+	CircuitBreaker            circuitBreakerState `json:"circuit_breaker"`
+	Backpressure              map[string]int      `json:"backpressure"`
 }
 
 func (m *Manager) GetStatus() Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return Status{
-		Enabled:      m.cfg.Enabled,
-		DryRun:       m.cfg.DryRun,
-		Paused:       m.paused,
-		IsLeader:     m.leader,
-		WorkerID:     m.workerID,
-		TickInterval: m.cfg.TickInterval,
-		Model:        m.cfg.Model,
+		Enabled:                   m.cfg.Enabled,
+		DryRun:                    m.cfg.DryRun,
+		Paused:                    m.paused,
+		IsLeader:                  m.leader,
+		WorkerID:                  m.workerID,
+		TickInterval:              m.cfg.TickInterval,
+		Model:                     m.cfg.Model,
+		Health:                    m.health,
+		StartupRecoveredStaleJobs: m.startupRecoveredStaleJobs,
+		CircuitBreaker:            m.breaker,
+		Backpressure: map[string]int{
+			"max_queued_total":       m.maxQueuedTotal(),
+			"max_queued_per_project": m.maxQueuedPerProject(),
+		},
 	}
 }
 
@@ -376,6 +414,112 @@ func (m *Manager) CancelJob(ctx context.Context, id uuid.UUID) error {
 }
 
 func maxDuration(a, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func (m *Manager) maxQueuedTotal() int {
+	return maxManagerInt(100, m.cfg.ClaimBatchSize*20)
+}
+
+func (m *Manager) maxQueuedPerProject() int {
+	return maxManagerInt(20, m.cfg.ClaimBatchSize*5)
+}
+
+func (m *Manager) queueLimits() (int, int) {
+	return m.maxQueuedTotal(), m.maxQueuedPerProject()
+}
+
+func (m *Manager) refreshHealthSnapshot(ctx context.Context) error {
+	health, err := m.repo.GetQueueHealthSummary(ctx)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.health = *health
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *Manager) breakerShouldDefer(job Job) bool {
+	if !m.cfg.LLMConflictGuardEnabled || job.JobType != "auto_merge_from_suggestion" {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.breaker.Open {
+		return false
+	}
+	if m.breaker.CooldownUntil == nil {
+		return true
+	}
+	if time.Now().UTC().After(*m.breaker.CooldownUntil) {
+		// half-open probe: allow one execution attempt
+		m.breaker.Open = false
+		return false
+	}
+	return true
+}
+
+func (m *Manager) llmAllowed() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.breaker.Open {
+		return true
+	}
+	if m.breaker.CooldownUntil == nil {
+		return false
+	}
+	return time.Now().UTC().After(*m.breaker.CooldownUntil)
+}
+
+func (m *Manager) deferClaimedJob(ctx context.Context, job Job, reason string, delay time.Duration) error {
+	_, err := m.pool.Exec(ctx, `
+		UPDATE steward_jobs
+		SET status='queued', run_after = NOW() + $2::interval, last_error = $3,
+		    locked_by=NULL, locked_at=NULL, lease_expires_at=NULL, updated_at=NOW()
+		WHERE id = $1
+	`, job.ID, fmt.Sprintf("%d seconds", int(delay.Seconds())), reason)
+	return err
+}
+
+func (m *Manager) recordExecutionFailure(job Job, err error) {
+	if !m.cfg.LLMConflictGuardEnabled || job.JobType != "auto_merge_from_suggestion" {
+		return
+	}
+	now := time.Now().UTC()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.breaker.ConsecutiveFailures++
+	m.breaker.LastFailure = &now
+	if m.breaker.ConsecutiveFailures >= 3 {
+		cooldown := now.Add(2 * time.Minute)
+		m.breaker.Open = true
+		m.breaker.Reason = "repeated_model_or_executor_failures"
+		m.breaker.OpenedAt = &now
+		m.breaker.CooldownUntil = &cooldown
+	}
+	_ = err
+}
+
+func (m *Manager) recordExecutionSuccess(job Job, result *ExecutionResult) {
+	if job.JobType != "auto_merge_from_suggestion" {
+		return
+	}
+	now := time.Now().UTC()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.breaker.ConsecutiveFailures = 0
+	m.breaker.Open = false
+	m.breaker.Reason = ""
+	m.breaker.CooldownUntil = nil
+	m.breaker.LastProbeSuccessAt = &now
+	_ = result
+}
+
+func maxManagerInt(a, b int) int {
 	if a > b {
 		return a
 	}

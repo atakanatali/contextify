@@ -93,6 +93,18 @@ type FailureBreakdown struct {
 	Count  int64  `json:"count"`
 }
 
+type QueueHealthSummary struct {
+	QueuedTotal                int64               `json:"queued_total"`
+	QueuedByProjectTop         []ProjectQueueDepth `json:"queued_by_project_top"`
+	DeadLetterTotal            int64               `json:"dead_letter_total"`
+	AverageProcessingLatencyMs int64               `json:"average_processing_latency_ms"`
+}
+
+type ProjectQueueDepth struct {
+	ProjectID string `json:"project_id"`
+	Count     int64  `json:"count"`
+}
+
 type Derivation struct {
 	ID              uuid.UUID
 	SourceMemoryIDs []uuid.UUID
