@@ -328,6 +328,93 @@ contextify/
 | `created_at` | TIMESTAMPTZ | When the suggestion was created |
 | `resolved_at` | TIMESTAMPTZ | When it was accepted/rejected |
 
+### steward_jobs table (planned runtime queue)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `job_type` | TEXT | Executor type (auto_merge, derive, recheck, policy_tune, etc.) |
+| `project_id` | TEXT | Optional project scope |
+| `source_memory_ids` | UUID[] | Related source memory IDs |
+| `trigger_reason` | TEXT | Why the job was created |
+| `payload` | JSONB | Executor input payload |
+| `status` | TEXT | queued, running, succeeded, failed, dead_letter, cancelled |
+| `priority` | INTEGER | Higher first |
+| `attempt_count` | INTEGER | Current attempt count |
+| `max_attempts` | INTEGER | Retry cap |
+| `run_after` | TIMESTAMPTZ | Earliest eligible execution time |
+| `locked_by` | TEXT | Worker/instance identifier |
+| `locked_at` | TIMESTAMPTZ | Claim timestamp |
+| `lease_expires_at` | TIMESTAMPTZ | Lease expiry for recovery |
+| `last_error` | TEXT | Last terminal/retry error message |
+| `idempotency_key` | TEXT | De-duplication key (unique, partial) |
+| `created_at` | TIMESTAMPTZ | Creation timestamp |
+| `updated_at` | TIMESTAMPTZ | Updated by trigger |
+
+### steward_runs table (per-attempt run log)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `job_id` | UUID | Associated steward job |
+| `provider` | TEXT | Model/runtime provider |
+| `model` | TEXT | Model name |
+| `input_snapshot` | JSONB | Redacted input snapshot |
+| `output_snapshot` | JSONB | Structured output snapshot |
+| `input_hash` | TEXT | Snapshot hash for diffing/caching |
+| `prompt_tokens` | INTEGER | Prompt token count |
+| `completion_tokens` | INTEGER | Completion token count |
+| `total_tokens` | INTEGER | Total tokens |
+| `latency_ms` | INTEGER | Run latency |
+| `status` | TEXT | running, succeeded, failed, skipped |
+| `error_class` | TEXT | Error taxonomy |
+| `error_message` | TEXT | Redacted error summary |
+| `created_at` | TIMESTAMPTZ | Run start time |
+| `completed_at` | TIMESTAMPTZ | Run completion time |
+
+### steward_events table (append-only timeline)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `job_id` | UUID | Related job |
+| `run_id` | UUID | Related run (nullable) |
+| `event_type` | TEXT | Event taxonomy key |
+| `data` | JSONB | Structured event payload |
+| `schema_version` | INTEGER | Payload schema version |
+| `created_at` | TIMESTAMPTZ | Event time |
+
+### memory_derivations table (lineage + scoring)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `source_memory_ids` | UUID[] | Source memory lineage |
+| `derived_memory_id` | UUID | Created derived memory (nullable) |
+| `derivation_type` | TEXT | Derivation category |
+| `confidence` | REAL | Confidence score |
+| `novelty` | REAL | Novelty score |
+| `status` | TEXT | candidate, accepted, skipped, failed |
+| `model` | TEXT | Model used for derivation |
+| `payload` | JSONB | Candidate payload / metadata |
+| `created_at` | TIMESTAMPTZ | Created time |
+| `updated_at` | TIMESTAMPTZ | Updated time |
+
+### steward_policy_history table (safe self-learn/audit)
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `policy_key` | TEXT | Tunable config key |
+| `prior_value` | DOUBLE PRECISION | Previous value |
+| `new_value` | DOUBLE PRECISION | New value |
+| `reason` | TEXT | Human/system rationale |
+| `sample_size` | INTEGER | Evidence sample size |
+| `evidence` | JSONB | Metrics snapshot supporting change |
+| `changed_by` | TEXT | Actor (steward/operator) |
+| `rollback_of_id` | UUID | Optional reference to reverted change |
+| `created_at` | TIMESTAMPTZ | Change time |
+
 ### Indexes
 
 | Index | Type | Purpose |
@@ -348,6 +435,13 @@ contextify/
 | `idx_suggestions_status` | B-tree (partial) | Pending suggestions only |
 | `idx_suggestions_project` | B-tree | Suggestions by project |
 | `idx_suggestions_similarity` | B-tree (DESC) | Highest similarity first |
+| `idx_steward_jobs_status_run_after_priority` | B-tree | Queue claiming by status/time/priority |
+| `idx_steward_jobs_project_status` | B-tree | Project-scoped job filtering |
+| `uq_steward_jobs_idempotency_key` | Partial unique | Exactly-once enqueue by idempotency key |
+| `idx_steward_runs_job_created` | B-tree | Runs by job (latest first) |
+| `idx_steward_events_job_created` | B-tree | Event timeline per job |
+| `idx_memory_derivations_derived_memory` | B-tree | Derivation lineage lookup |
+| `idx_steward_policy_history_key_created` | B-tree | Policy history by key |
 
 ## Hybrid Search Algorithm
 
@@ -667,4 +761,3 @@ sequenceDiagram
 - **Operational**: model latency spikes can saturate worker pools. Mitigation: timeouts, backpressure, bounded concurrency, circuit breakers (planned in STW13).
 - **Integration**: executors may bypass memory service invariants if they write directly. Mitigation: service-first integration policy and explicit exceptions.
 - **Integration**: telemetry schema drift can break later UI/API contracts. Mitigation: version event payloads and anchor fields in ADR-001.
-
