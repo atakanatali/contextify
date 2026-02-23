@@ -513,6 +513,10 @@ type stewardModeRequest struct {
 	DryRun bool `json:"dry_run"`
 }
 
+type stewardPolicyRollbackRequest struct {
+	PolicyKey string `json:"policy_key"`
+}
+
 func (h *Handlers) requireSteward(w http.ResponseWriter) bool {
 	if h.stewardMgr == nil {
 		writeError(w, http.StatusNotFound, "steward not configured")
@@ -617,6 +621,39 @@ func (h *Handlers) GetStewardMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, m)
 }
 
+func (h *Handlers) GetStewardPolicyHistory(w http.ResponseWriter, r *http.Request) {
+	if !h.requireSteward(w) {
+		return
+	}
+	limit, offset := 50, 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 || n > 500 {
+			writeError(w, http.StatusBadRequest, "limit must be between 1 and 500")
+			return
+		}
+		limit = n
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "offset must be >= 0")
+			return
+		}
+		offset = n
+	}
+	var key *string
+	if v := r.URL.Query().Get("policy_key"); v != "" {
+		key = &v
+	}
+	items, err := h.stewardMgr.ListPolicyChanges(r.Context(), key, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "limit": limit, "offset": offset})
+}
+
 func (h *Handlers) StewardRunOnce(w http.ResponseWriter, r *http.Request) {
 	if !h.requireSteward(w) {
 		return
@@ -670,6 +707,27 @@ func (h *Handlers) CancelStewardJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled", "id": id.String()})
+}
+
+func (h *Handlers) RollbackStewardPolicy(w http.ResponseWriter, r *http.Request) {
+	if !h.requireSteward(w) {
+		return
+	}
+	var req stewardPolicyRollbackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if req.PolicyKey == "" {
+		writeError(w, http.StatusBadRequest, "policy_key is required")
+		return
+	}
+	change, err := h.stewardMgr.RollbackPolicy(r.Context(), req.PolicyKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, change)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

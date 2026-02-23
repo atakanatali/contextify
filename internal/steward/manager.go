@@ -30,11 +30,12 @@ type Manager struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	mu       sync.Mutex
-	lockConn *pgxpool.Conn
-	leader   bool
-	workerID string
-	paused   bool
+	mu             sync.Mutex
+	lockConn       *pgxpool.Conn
+	leader         bool
+	workerID       string
+	paused         bool
+	lastPolicyEval time.Time
 }
 
 func NewManager(pool *pgxpool.Pool, svc *memory.Service, cfg config.StewardConfig, embeddingOllamaURL string) *Manager {
@@ -63,7 +64,8 @@ func (m *Manager) Start() {
 		llmClient = stewardllm.NewClient(m.ollamaURL, m.cfg.Model)
 	}
 	m.registry.Register("auto_merge_from_suggestion", NewAutoMergeSuggestionExecutor(m.repo, m.svc, m.cfg.DryRun, llmClient))
-	m.registry.Register("derive_memories", NewDerivationExecutor(m.repo, m.svc, m.cfg.Derivation))
+	m.registry.Register("derive_memories", NewDerivationExecutorFromPtr(m.repo, m.svc, &m.cfg.Derivation))
+	m.registry.Register("policy_tune", NewPolicyTuneExecutor(m))
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.wg.Add(1)
@@ -127,6 +129,21 @@ func (m *Manager) tick(ctx context.Context, leaseDuration time.Duration) error {
 			slog.Warn("failed to enqueue auto-merge suggestion jobs", "error", err)
 		} else if n > 0 {
 			slog.Debug("enqueued auto-merge suggestion jobs", "count", n)
+		}
+	}
+	if m.cfg.SelfLearn.Enabled && m.cfg.SelfLearn.EvalInterval > 0 {
+		m.mu.Lock()
+		due := m.lastPolicyEval.IsZero() || time.Since(m.lastPolicyEval) >= m.cfg.SelfLearn.EvalInterval
+		m.mu.Unlock()
+		if due {
+			key := "steward:policy_tune:" + time.Now().UTC().Truncate(m.cfg.SelfLearn.EvalInterval).Format(time.RFC3339)
+			if err := m.repo.EnqueuePolicyTuneJob(ctx, m.cfg.MaxAttempts, key); err != nil {
+				slog.Warn("failed to enqueue policy_tune job", "error", err)
+			} else {
+				m.mu.Lock()
+				m.lastPolicyEval = time.Now().UTC()
+				m.mu.Unlock()
+			}
 		}
 	}
 
@@ -314,6 +331,30 @@ func (m *Manager) ListEventsByJob(ctx context.Context, jobID uuid.UUID, limit, o
 
 func (m *Manager) Metrics(ctx context.Context) (*MetricsSummary, error) {
 	return m.repo.GetMetricsSummary(ctx)
+}
+
+func (m *Manager) ListPolicyChanges(ctx context.Context, policyKey *string, limit, offset int) ([]PolicyChange, error) {
+	return m.repo.ListPolicyChanges(ctx, policyKey, limit, offset)
+}
+
+func (m *Manager) RollbackPolicy(ctx context.Context, policyKey string) (*PolicyChange, error) {
+	change, err := m.repo.RollbackLatestPolicyChange(ctx, policyKey)
+	if err != nil {
+		return nil, err
+	}
+	if change != nil && change.NewValue != nil {
+		m.mu.Lock()
+		switch policyKey {
+		case "auto_merge_threshold":
+			m.cfg.AutoMergeThreshold = *change.NewValue
+		case "derivation.min_confidence":
+			m.cfg.Derivation.MinConfidence = *change.NewValue
+		case "derivation.min_novelty":
+			m.cfg.Derivation.MinNovelty = *change.NewValue
+		}
+		m.mu.Unlock()
+	}
+	return change, nil
 }
 
 func (m *Manager) RetryJob(ctx context.Context, id uuid.UUID) error {
