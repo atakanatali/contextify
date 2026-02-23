@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import EmptyState from '../components/EmptyState'
+import ConfirmDialog from '../components/ConfirmDialog'
+import { useToast } from '../hooks/useToast'
 
 function get(obj, ...keys) {
   for (const key of keys) {
@@ -123,6 +125,7 @@ function StatCard({ label, value, sub, tone = 'text-white' }) {
 }
 
 export default function Steward() {
+  const toast = useToast()
   const [status, setStatus] = useState(null)
   const [metrics, setMetrics] = useState(null)
   const [runsResp, setRunsResp] = useState({ runs: [], limit: 50, offset: 0 })
@@ -136,6 +139,11 @@ export default function Steward() {
   const [serverFilters, setServerFilters] = useState({ status: '', jobType: '', projectId: '', model: '' })
   const [clientFilters, setClientFilters] = useState({ from: '', to: '', tokenMin: '', tokenMax: '' })
   const [pagination, setPagination] = useState({ limit: 50, offset: 0 })
+  const [refreshSeconds, setRefreshSeconds] = useState(0)
+  const [actionLoading, setActionLoading] = useState('')
+  const [confirmState, setConfirmState] = useState(null)
+  const [lastAction, setLastAction] = useState(null)
+  const [jobActionAudit, setJobActionAudit] = useState({})
 
   async function loadBase({ keepSelection = true } = {}) {
     setLoading(true)
@@ -193,6 +201,15 @@ export default function Steward() {
     return () => { cancelled = true }
   }, [selectedJobId])
 
+  useEffect(() => {
+    if (!refreshSeconds) return undefined
+    const timer = setInterval(() => {
+      loadBase()
+    }, refreshSeconds * 1000)
+    return () => clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshSeconds, serverFilters, pagination])
+
   const allRuns = useMemo(() => (Array.isArray(runsResp.runs) ? runsResp.runs.map(deriveRunView) : []), [runsResp])
 
   const filteredRuns = useMemo(() => {
@@ -232,9 +249,53 @@ export default function Steward() {
   const events = Array.isArray(eventsResp.events) ? eventsResp.events : []
   const selectedHasRedaction = selectedRun && (hasRedaction(selectedRun.input) || hasRedaction(selectedRun.output) || hasRedaction(events.map((e) => get(e, 'Data', 'data'))))
 
+  async function performAction(actionKey, jobId, fn, successMessage) {
+    setActionLoading(actionKey)
+    const actionAt = new Date().toISOString()
+    try {
+      await fn()
+      const audit = {
+        action_by: 'local-ui',
+        action_at: actionAt,
+        action_result: 'success',
+        action_key: actionKey,
+        job_id: jobId || null,
+      }
+      setLastAction(audit)
+      if (jobId) {
+        setJobActionAudit((prev) => ({ ...prev, [jobId]: audit }))
+      }
+      toast.success(successMessage)
+      await loadBase()
+      if (jobId) {
+        setSelectedJobId(jobId)
+      }
+    } catch (e) {
+      const audit = {
+        action_by: 'local-ui',
+        action_at: actionAt,
+        action_result: 'failed',
+        action_key: actionKey,
+        job_id: jobId || null,
+      }
+      setLastAction(audit)
+      if (jobId) {
+        setJobActionAudit((prev) => ({ ...prev, [jobId]: audit }))
+      }
+      toast.error(e.message || 'Action failed')
+    } finally {
+      setActionLoading('')
+    }
+  }
+
+  function requestConfirm(config) {
+    setConfirmState(config)
+  }
+
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4">
+    <>
+      <div className="space-y-6 animate-fade-in">
+        <div className="flex flex-col xl:flex-row xl:items-end xl:justify-between gap-4">
         <div>
           <div className="text-xs uppercase tracking-[0.2em] text-gray-500 mb-2">Steward Console</div>
           <h1 className="text-2xl md:text-3xl font-semibold text-white">Runs, decisions, IO trace</h1>
@@ -267,6 +328,101 @@ export default function Steward() {
             {get(status, 'dry_run', 'DryRun') ? 'dry-run' : 'write-enabled'}
           </span>
         </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <div className="text-xs uppercase tracking-wider text-gray-500 mr-1">Controls</div>
+          <button
+            className="btn-primary py-1.5"
+            disabled={!!actionLoading}
+            onClick={() => performAction('run_once', null, () => api.triggerStewardRunOnce(), 'Steward run-once triggered')}
+          >
+            ▶ Run Once
+          </button>
+          <button
+            className="btn-ghost py-1.5"
+            disabled={!!actionLoading}
+            onClick={() => performAction(
+              'mode_pause',
+              null,
+              () => api.updateStewardMode({ paused: true, dry_run: !!get(status, 'dry_run', 'DryRun') }),
+              'Steward paused',
+            )}
+          >
+            ⏸ Pause
+          </button>
+          <button
+            className="btn-ghost py-1.5"
+            disabled={!!actionLoading}
+            onClick={() => requestConfirm({
+              title: 'Resume Steward',
+              message: 'Resuming will allow queued jobs to be processed immediately based on current mode. Continue?',
+              confirmLabel: 'Resume',
+              danger: false,
+              onConfirm: () => performAction(
+                'mode_resume',
+                null,
+                () => api.updateStewardMode({ paused: false, dry_run: !!get(status, 'dry_run', 'DryRun') }),
+                'Steward resumed',
+              ),
+            })}
+          >
+            ▶ Resume
+          </button>
+          <button
+            className="btn-ghost py-1.5"
+            disabled={!!actionLoading}
+            onClick={() => performAction(
+              'mode_dry_run_on',
+              null,
+              () => api.updateStewardMode({ paused: !!get(status, 'paused', 'Paused'), dry_run: true }),
+              'Dry-run enabled',
+            )}
+          >
+            🧪 Dry-Run On
+          </button>
+          <button
+            className="btn-ghost py-1.5"
+            disabled={!!actionLoading}
+            onClick={() => requestConfirm({
+              title: 'Enable Writes',
+              message: 'This disables dry-run and allows steward actions to apply writes. Continue?',
+              confirmLabel: 'Enable Writes',
+              danger: true,
+              onConfirm: () => performAction(
+                'mode_dry_run_off',
+                null,
+                () => api.updateStewardMode({ paused: !!get(status, 'paused', 'Paused'), dry_run: false }),
+                'Write mode enabled',
+              ),
+            })}
+          >
+            ⚠ Enable Writes
+          </button>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-xs text-gray-500 uppercase tracking-wider">Auto refresh</span>
+            <select
+              className="input py-1.5 text-xs w-auto"
+              value={refreshSeconds}
+              onChange={(e) => setRefreshSeconds(Number(e.target.value))}
+              disabled={!!actionLoading}
+            >
+              <option value={0}>Off</option>
+              <option value={5}>5s</option>
+              <option value={10}>10s</option>
+              <option value={30}>30s</option>
+            </select>
+          </div>
+        </div>
+        {lastAction ? (
+          <div className="mt-3 rounded-lg border border-border bg-surface-2 p-3 text-xs flex flex-wrap gap-x-4 gap-y-1">
+            <span className="text-gray-500 uppercase tracking-wider">Last Action</span>
+            <span className="text-gray-300">action_by: <span className="font-mono">local-ui</span></span>
+            <span className="text-gray-300">action_at: <span className="font-mono">{fmtDate(lastAction.action_at)}</span></span>
+            <span className={`${lastAction.action_result === 'success' ? 'text-emerald-300' : 'text-red-300'}`}>
+              action_result: {lastAction.action_result}
+            </span>
+            <span className="text-gray-400">{lastAction.action_key}</span>
+          </div>
+        ) : null}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
           <div className="bg-surface-2 rounded-lg p-3 border border-border">
             <div className="text-xs uppercase tracking-wider text-gray-500 mb-1">Worker</div>
@@ -371,20 +527,21 @@ export default function Steward() {
                     <th className="px-3 py-2 text-right">Latency</th>
                     <th className="px-3 py-2 text-left">Decision</th>
                     <th className="px-3 py-2 text-left">Side Effects</th>
+                    <th className="px-3 py-2 text-left">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {loading ? (
                     Array.from({ length: 6 }).map((_, i) => (
                       <tr key={i} className="border-t border-border">
-                        <td colSpan={9} className="px-3 py-3">
+                        <td colSpan={10} className="px-3 py-3">
                           <div className="h-6 rounded bg-surface-2 animate-pulse-soft" />
                         </td>
                       </tr>
                     ))
                   ) : filteredRuns.length === 0 ? (
                     <tr className="border-t border-border">
-                      <td colSpan={9}>
+                      <td colSpan={10}>
                         <EmptyState icon="🧪" title="No steward runs match filters" description="Try broadening server/client filters or trigger a steward run." />
                       </td>
                     </tr>
@@ -409,6 +566,51 @@ export default function Steward() {
                         <td className="px-3 py-2 text-right text-gray-200 tabular-nums">{fmtMs(run.latencyMs)}</td>
                         <td className="px-3 py-2 text-gray-200">{run.decision}</td>
                         <td className="px-3 py-2 text-gray-400 max-w-[220px] truncate" title={run.sideEffectSummary}>{run.sideEffectSummary}</td>
+                        <td className="px-3 py-2">
+                          <div className="flex flex-wrap items-center gap-1">
+                            {(run.status === 'failed' || run.status === 'dead_letter' || run.status === 'cancelled') && run.jobId ? (
+                              <button
+                                className="btn-ghost py-1 px-2 text-xs"
+                                disabled={!!actionLoading}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  requestConfirm({
+                                    title: 'Retry Steward Job',
+                                    message: `Retry job ${run.jobId}? This will requeue the job for steward processing.`,
+                                    confirmLabel: 'Retry Job',
+                                    danger: false,
+                                    onConfirm: () => performAction(`retry:${run.jobId}`, run.jobId, () => api.retryStewardJob(run.jobId), 'Job requeued'),
+                                  })
+                                }}
+                              >
+                                Retry
+                              </button>
+                            ) : null}
+                            {(run.status === 'queued' || run.status === 'running') && run.jobId ? (
+                              <button
+                                className="btn-danger py-1 px-2 text-xs border border-red-800/60"
+                                disabled={!!actionLoading}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  requestConfirm({
+                                    title: 'Cancel Steward Job',
+                                    message: `Cancel job ${run.jobId}? This stops current/queued processing for this job.`,
+                                    confirmLabel: 'Cancel Job',
+                                    danger: true,
+                                    onConfirm: () => performAction(`cancel:${run.jobId}`, run.jobId, () => api.cancelStewardJob(run.jobId), 'Job cancelled'),
+                                  })
+                                }}
+                              >
+                                Cancel
+                              </button>
+                            ) : null}
+                            {jobActionAudit[run.jobId] ? (
+                              <span className={`text-[10px] px-2 py-0.5 rounded border ${jobActionAudit[run.jobId].action_result === 'success' ? 'text-emerald-300 border-emerald-700/40 bg-emerald-900/20' : 'text-red-300 border-red-700/40 bg-red-900/20'}`}>
+                                {jobActionAudit[run.jobId].action_result}
+                              </span>
+                            ) : null}
+                          </div>
+                        </td>
                       </tr>
                     ))
                   )}
@@ -443,6 +645,17 @@ export default function Steward() {
                   </div>
                   <span className={`text-xs px-2 py-1 rounded border ${statusClass(selectedRun.status)}`}>{selectedRun.status}</span>
                 </div>
+
+                {selectedRun?.jobId && jobActionAudit[selectedRun.jobId] ? (
+                  <div className="rounded-lg border border-border bg-surface-2 p-3 text-xs space-y-1">
+                    <div className="text-gray-500 uppercase tracking-wider">Action Audit</div>
+                    <div className="text-gray-300">action_by: <span className="font-mono">{jobActionAudit[selectedRun.jobId].action_by}</span></div>
+                    <div className="text-gray-300">action_at: <span className="font-mono">{fmtDate(jobActionAudit[selectedRun.jobId].action_at)}</span></div>
+                    <div className={jobActionAudit[selectedRun.jobId].action_result === 'success' ? 'text-emerald-300' : 'text-red-300'}>
+                      action_result: {jobActionAudit[selectedRun.jobId].action_result}
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <div className="bg-surface-2 border border-border rounded-lg p-2">
@@ -518,7 +731,17 @@ export default function Steward() {
             )}
           </div>
         </div>
+        </div>
       </div>
-    </div>
+      <ConfirmDialog
+        open={!!confirmState}
+        onClose={() => setConfirmState(null)}
+        onConfirm={() => confirmState?.onConfirm?.()}
+        title={confirmState?.title}
+        message={confirmState?.message}
+        confirmLabel={confirmState?.confirmLabel}
+        danger={confirmState?.danger ?? true}
+      />
+    </>
   )
 }
