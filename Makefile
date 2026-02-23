@@ -2,7 +2,7 @@ VERSION ?= dev
 LDFLAGS = -s -w -X main.version=$(VERSION)
 RECALL_BENCH_REPORT_PATH ?= artifacts/recall-benchmark-report.json
 
-.PHONY: build-server build-cli build-all clean bench-recall
+.PHONY: build-server build-cli build-all clean bench-recall verify-steward
 
 build-server:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/contextify-server ./cmd/server
@@ -18,6 +18,10 @@ clean:
 bench-recall:
 	@echo "Running recall benchmark (requires running server at localhost:8420)..."
 	RECALL_BENCH_REPORT_PATH=$(RECALL_BENCH_REPORT_PATH) go test -tags e2e ./tests/e2e -run TestRecallBenchmark -v -count=1
+
+verify-steward:
+	@echo "Running steward verification matrix..."
+	STEWARD_VERIFY_REPORT_PATH=$${STEWARD_VERIFY_REPORT_PATH:-artifacts/steward-verification-matrix.json} ./scripts/steward-verification-matrix.sh
 
 .PHONY: release-cli
 release-cli:

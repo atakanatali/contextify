@@ -150,6 +150,13 @@ jobs:
           mkdir -p artifacts
           make bench-recall 2>&1 | tee artifacts/recall-benchmark.log
 
+      - name: Run steward verification matrix
+        env:
+          STEWARD_VERIFY_REPORT_PATH: artifacts/steward-verification-matrix.json
+        run: |
+          mkdir -p artifacts
+          make verify-steward 2>&1 | tee artifacts/steward-verification-matrix.log
+
       - name: Skip benchmark (model unavailable)
         if: env.OLLAMA_MODEL_READY != '1'
         run: echo "Skipping recall benchmark because Ollama model pre-pull failed on CI runner."
@@ -166,4 +173,14 @@ jobs:
           path: |
             artifacts/recall-benchmark-report.json
             artifacts/recall-benchmark.log
+          if-no-files-found: warn
+
+      - name: Upload steward verification artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: steward-verification-matrix
+          path: |
+            artifacts/steward-verification-matrix.json
+            artifacts/steward-verification-matrix.log
           if-no-files-found: warn
