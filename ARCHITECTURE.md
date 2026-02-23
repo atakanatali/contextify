@@ -488,3 +488,183 @@ Development uses separate containers (`docker-compose.yml`) for fast iteration. 
 ### Connection Retry
 
 The Go server includes connection retry logic (10 attempts, linear backoff) to handle the startup delay when PostgreSQL and Ollama initialize inside the same container.
+
+## Steward (Planned 24/7 Memory Lifecycle)
+
+The **Memory Steward** is a planned in-process subsystem for continuous, auditable lifecycle management (dedup auto-merge, derivation, recheck, policy tuning). It is defined in [docs/steward/ADR-001-memory-steward.md](docs/steward/ADR-001-memory-steward.md) and is designed to be **disabled by default** so current behavior remains unchanged.
+
+### Steward Module Decomposition
+
+```mermaid
+flowchart LR
+    subgraph Runtime["Contextify Server Runtime"]
+        ORCH["Steward Orchestrator"]
+        Q["Queue / Claimer"]
+        EX["Executors\nauto_merge | derive | recheck | policy_tune"]
+        AUD["Audit Logger"]
+        MET["Metrics Emitter"]
+    end
+
+    subgraph Data["PostgreSQL"]
+        JQ[("Steward Jobs")]
+        JR[("Steward Runs")]
+        JE[("Steward Events")]
+        MEM[("Memories / Consolidation Tables")]
+    end
+
+    subgraph Model["Ollama (optional by executor)"]
+        LLM["Mini model / planner"]
+    end
+
+    ORCH --> Q
+    Q --> JQ
+    Q --> JR
+    Q --> EX
+    EX --> LLM
+    EX --> MEM
+    EX --> AUD
+    AUD --> JE
+    AUD --> JR
+    ORCH --> MET
+    EX --> MET
+
+    style ORCH fill:#b91c1c,color:#fff
+    style Q fill:#1d4ed8,color:#fff
+    style EX fill:#059669,color:#fff
+    style AUD fill:#7c3aed,color:#fff
+    style MET fill:#d97706,color:#fff
+```
+
+### Steward Job State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> queued
+    queued --> running: claim (FOR UPDATE SKIP LOCKED)
+    queued --> cancelled: operator cancel
+
+    running --> succeeded: executor + writes complete
+    running --> failed: retryable/non-retryable failure
+    running --> cancelled: cooperative cancel
+
+    failed --> queued: retry with backoff (idempotent)
+    failed --> dead_letter: max retries or invariant violation
+
+    succeeded --> [*]
+    dead_letter --> [*]
+    cancelled --> [*]
+```
+
+### Steward Runtime and Concurrency
+
+- Single active leader per deployment via PostgreSQL advisory lock.
+- Passive replicas may run the server but must not claim steward jobs without leadership.
+- Job claims use short DB transactions plus `FOR UPDATE SKIP LOCKED`.
+- Running jobs use leases + heartbeats; expired leases are recoverable with idempotent requeue logic.
+- All autonomous writes must be auditable and mapped to a steward event.
+
+### Integration with Existing Components
+
+- **Memory Service**: executors should call `internal/memory.Service` paths where possible to preserve normalization, cache invalidation, and merge semantics.
+- **Consolidation**: `auto_merge` executor reuses merge logic and writes additional steward audit events around the decision path.
+- **Schedulers**: existing goroutines continue to operate initially; future STW issues may route outputs into the steward queue.
+- **Telemetry**: steward emits a separate event stream; existing recall/store telemetry remains unchanged.
+
+### Steward Event and Observability Contract
+
+Required event types (minimum):
+- `job_created`
+- `job_claimed`
+- `model_invoked`
+- `decision_made`
+- `write_applied`
+- `write_skipped`
+- `job_completed`
+- `job_failed`
+
+Required UI-facing telemetry fields (run/event level):
+- redacted input snapshot
+- output JSON (structured decision/result)
+- model name
+- prompt/completion/total token counts
+- latency ms
+- error class / redacted message
+- side effects (applied or skipped writes)
+
+### Steward Sequence Diagrams
+
+#### Claim + Execute (Auto Merge)
+
+```mermaid
+sequenceDiagram
+    participant Orch as Steward Orchestrator
+    participant DB as PostgreSQL
+    participant Ex as auto_merge Executor
+    participant Model as Ollama
+    participant Svc as Memory Service
+
+    Orch->>DB: advisory lock acquire/verify
+    Orch->>DB: claim queued job (FOR UPDATE SKIP LOCKED)
+    DB-->>Orch: job marked running + lease
+    Orch->>Ex: execute(job)
+    Ex->>DB: append event(job_claimed)
+    Ex->>Model: optional merge plan / validation call
+    Model-->>Ex: structured output
+    Ex->>DB: append event(model_invoked)
+    Ex->>Ex: deterministic decision validation
+    Ex->>DB: append event(decision_made)
+
+    alt write allowed and valid
+        Ex->>Svc: ConsolidateMemories(...)
+        Svc->>DB: merge writes + consolidation log
+        Ex->>DB: append event(write_applied)
+        Ex->>DB: mark run/job succeeded + job_completed
+    else dry-run or validation failed
+        Ex->>DB: append event(write_skipped)
+        Ex->>DB: mark run/job succeeded + job_completed
+    end
+```
+
+#### Failure Recovery (Lease Expiry / Retry)
+
+```mermaid
+sequenceDiagram
+    participant Worker as Steward Worker
+    participant DB as PostgreSQL
+    participant Sweep as Recovery Sweeper
+
+    Worker->>DB: claim job -> running (lease_expires_at=T)
+    Worker->>DB: heartbeat extend lease
+    Note over Worker,DB: process crash / lock loss before completion
+
+    Sweep->>DB: scan running jobs with expired lease
+    DB-->>Sweep: expired job rows
+    Sweep->>DB: append event(job_failed or recovery_detected)
+
+    alt attempts < max_retries and retryable
+        Sweep->>DB: set state=queued, schedule backoff
+    else non-retryable or max retries hit
+        Sweep->>DB: set state=dead_letter
+    end
+```
+
+### Rollout Phases
+
+1. **Dry-run only**: decision traces recorded, no steward writes applied.
+2. **Selective auto-apply**: whitelisted job types with deterministic validation.
+3. **Full auto with guardrails**: UI/API controls, auditability, and policy guardrails required.
+
+### Explicit Non-Goals (STW01)
+
+- Replacing current `Store()` dedup path immediately.
+- Adding external queue/workflow infrastructure.
+- Shipping the steward UI/API in this issue.
+- Turning on autonomous writes by default.
+
+### Steward Risk Register (Architecture-Level)
+
+- **Operational**: leader lock flapping during PostgreSQL instability can pause or duplicate work. Mitigation: leases, heartbeat grace windows, lock-loss handling, recovery events.
+- **Operational**: model latency spikes can saturate worker pools. Mitigation: timeouts, backpressure, bounded concurrency, circuit breakers (planned in STW13).
+- **Integration**: executors may bypass memory service invariants if they write directly. Mitigation: service-first integration policy and explicit exceptions.
+- **Integration**: telemetry schema drift can break later UI/API contracts. Mitigation: version event payloads and anchor fields in ADR-001.
+
