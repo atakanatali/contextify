@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestBackoffWithJitter_IncreasesWithAttempts(t *testing.T) {
@@ -67,4 +69,23 @@ func TestSameProjectOrGlobal(t *testing.T) {
 	if sameProjectOrGlobal(&a, &c) {
 		t.Fatalf("mismatched project should be blocked")
 	}
+}
+
+func TestParseDerivePayload_UsesFallback(t *testing.T) {
+	id := uuidMust("123e4567-e89b-12d3-a456-426614174000")
+	got, err := parseDerivePayload(nil, []uuid.UUID{id})
+	if err != nil {
+		t.Fatalf("parseDerivePayload error: %v", err)
+	}
+	if len(got.SourceMemoryIDs) != 1 || got.SourceMemoryIDs[0] != id {
+		t.Fatalf("unexpected source ids: %+v", got.SourceMemoryIDs)
+	}
+}
+
+func uuidMust(s string) uuid.UUID {
+	id, err := uuid.Parse(s)
+	if err != nil {
+		panic(err)
+	}
+	return id
 }

@@ -164,7 +164,17 @@ func (e *AutoMergeSuggestionExecutor) Execute(ctx context.Context, job Job) (*Ex
 			{"type": "merge_applied", "target_id": snap.MemoryAID, "source_id": snap.MemoryBID},
 			{"type": "suggestion_accepted", "suggestion_id": req.SuggestionID},
 		},
-	}, nil
+	}, e.enqueuePostMergeDerivation(ctx, snap)
+}
+
+func (e *AutoMergeSuggestionExecutor) enqueuePostMergeDerivation(ctx context.Context, snap *SuggestionSnapshot) error {
+	if snap == nil {
+		return nil
+	}
+	return e.repo.EnqueueDeriveJob(ctx, snap.ProjectID, []uuid.UUID{snap.MemoryAID, snap.MemoryBID}, map[string]any{
+		"source_memory_ids": []string{snap.MemoryAID.String(), snap.MemoryBID.String()},
+		"trigger":           "auto_merge_from_suggestion",
+	}, 3, "steward:derive:post_merge:"+snap.SuggestionID.String())
 }
 
 type autoMergeSuggestionPayload struct {
