@@ -71,6 +71,7 @@ jobs:
 
       - name: Ensure embedding model
         run: |
+          echo "OLLAMA_MODEL_READY=0" >> "$GITHUB_ENV"
           for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:11434/api/tags > /dev/null 2>&1; then
               break
@@ -78,9 +79,15 @@ jobs:
             echo "Waiting for ollama... ($i/30)"
             sleep 2
           done
-          curl -sf -X POST http://127.0.0.1:11434/api/pull \
+          # Best-effort pre-pull: external network to Ollama model registry can be flaky on CI runners.
+          # Endpoint health checks should still run even if model download times out.
+          if curl --max-time 300 --retry 2 --retry-delay 3 -sf -X POST http://127.0.0.1:11434/api/pull \
             -H 'Content-Type: application/json' \
-            -d '{"model":"nomic-embed-text","stream":false}'
+            -d '{"model":"nomic-embed-text","stream":false}'; then
+            echo "OLLAMA_MODEL_READY=1" >> "$GITHUB_ENV"
+          else
+            echo "Warning: failed to pre-pull nomic-embed-text in CI; continuing without benchmark."
+          fi
 
       - name: Create pgvector extension
         env:
@@ -134,6 +141,7 @@ jobs:
           echo "All endpoints responding."
 
       - name: Run recall benchmark
+        if: env.OLLAMA_MODEL_READY == '1'
         env:
           RECALL_BENCH_MAX_P95_MS: "2500"
           RECALL_BENCH_MIN_HIT_RATE: "0.80"
@@ -141,6 +149,10 @@ jobs:
         run: |
           mkdir -p artifacts
           make bench-recall 2>&1 | tee artifacts/recall-benchmark.log
+
+      - name: Skip benchmark (model unavailable)
+        if: env.OLLAMA_MODEL_READY != '1'
+        run: echo "Skipping recall benchmark because Ollama model pre-pull failed on CI runner."
 
       - name: Stop server
         if: always()
