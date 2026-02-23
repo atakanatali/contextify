@@ -336,6 +336,15 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, req UpdateRequest) (
 		title := ""
 		if req.Title != nil {
 			title = *req.Title
+		} else {
+			existing, err := s.repo.Get(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			if existing == nil {
+				return nil, fmt.Errorf("%w: %s", ErrMemoryNotFound, id)
+			}
+			title = existing.Title
 		}
 		vec, err := s.embedder.Embed(ctx, title+" "+*req.Content)
 		if err != nil {
