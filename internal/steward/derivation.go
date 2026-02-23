@@ -15,10 +15,19 @@ import (
 type DerivationExecutor struct {
 	repo *Repository
 	svc  *memory.Service
-	cfg  config.StewardDerivation
+	cfg  *config.StewardDerivation
 }
 
 func NewDerivationExecutor(repo *Repository, svc *memory.Service, cfg config.StewardDerivation) *DerivationExecutor {
+	cfgCopy := cfg
+	return &DerivationExecutor{repo: repo, svc: svc, cfg: &cfgCopy}
+}
+
+func NewDerivationExecutorFromPtr(repo *Repository, svc *memory.Service, cfg *config.StewardDerivation) *DerivationExecutor {
+	if cfg == nil {
+		empty := config.StewardDerivation{}
+		cfg = &empty
+	}
 	return &DerivationExecutor{repo: repo, svc: svc, cfg: cfg}
 }
 

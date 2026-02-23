@@ -79,10 +79,12 @@ func NewRouter(svc *memory.Service, stewardMgr *steward.Manager) *chi.Mux {
 		r.Get("/steward/runs", h.GetStewardRuns)
 		r.Get("/steward/jobs/{id}/events", h.GetStewardJobEvents)
 		r.Get("/steward/metrics", h.GetStewardMetrics)
+		r.Get("/steward/policies/history", h.GetStewardPolicyHistory)
 		r.Post("/steward/run-once", h.StewardRunOnce)
 		r.Put("/steward/mode", h.UpdateStewardMode)
 		r.Post("/steward/jobs/{id}/retry", h.RetryStewardJob)
 		r.Post("/steward/jobs/{id}/cancel", h.CancelStewardJob)
+		r.Post("/steward/policies/rollback", h.RollbackStewardPolicy)
 	})
 
 	// Serve embedded Web UI static files (SPA with fallback to index.html)
