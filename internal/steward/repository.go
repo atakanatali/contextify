@@ -113,6 +113,86 @@ func (r *Repository) ClaimJobs(ctx context.Context, workerID string, batchSize i
 	return jobs, nil
 }
 
+func (r *Repository) EnqueueAutoMergeSuggestionJobs(ctx context.Context, threshold float64, maxAttempts, limit int) (int64, error) {
+	return r.enqueueAutoMergeSuggestionJobsSlow(ctx, threshold, maxAttempts, limit)
+}
+
+func (r *Repository) enqueueAutoMergeSuggestionJobsSlow(ctx context.Context, threshold float64, maxAttempts, limit int) (int64, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, memory_a_id, memory_b_id, similarity, project_id
+		FROM consolidation_suggestions
+		WHERE status = 'pending' AND similarity >= $1
+		ORDER BY similarity DESC, created_at ASC
+		LIMIT $2
+	`, threshold, limit)
+	if err != nil {
+		return 0, fmt.Errorf("query auto-merge suggestions: %w", err)
+	}
+	defer rows.Close()
+
+	var inserted int64
+	for rows.Next() {
+		var sid, aID, bID uuid.UUID
+		var similarity float64
+		var projectID *string
+		if err := rows.Scan(&sid, &aID, &bID, &similarity, &projectID); err != nil {
+			return inserted, fmt.Errorf("scan auto-merge suggestion: %w", err)
+		}
+		_, err := r.pool.Exec(ctx, `
+			INSERT INTO steward_jobs (
+				id, job_type, project_id, source_memory_ids, trigger_reason, payload, status, priority,
+				attempt_count, max_attempts, run_after, idempotency_key
+			)
+			VALUES (
+				uuid_generate_v4(), 'auto_merge_from_suggestion', $1, ARRAY[$2,$3]::uuid[], 'pending_suggestion_high_similarity',
+				jsonb_build_object('suggestion_id',$4,'similarity',$5,'memory_a_id',$2,'memory_b_id',$3,'merge_strategy','smart_merge'),
+				'queued', 100, 0, $6, NOW(), $7
+			)
+			ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+		`, projectID, aID, bID, sid, similarity, maxAttempts, "steward:auto_merge_suggestion:"+sid.String())
+		if err != nil {
+			return inserted, fmt.Errorf("insert auto-merge steward job: %w", err)
+		}
+		inserted++
+	}
+	return inserted, rows.Err()
+}
+
+type SuggestionSnapshot struct {
+	SuggestionID uuid.UUID
+	MemoryAID    uuid.UUID
+	MemoryBID    uuid.UUID
+	Similarity   float64
+	Status       string
+	ProjectID    *string
+	AMemoryProj  *string
+	BMemoryProj  *string
+	AReplacedBy  *uuid.UUID
+	BReplacedBy  *uuid.UUID
+}
+
+func (r *Repository) GetSuggestionSnapshot(ctx context.Context, suggestionID uuid.UUID) (*SuggestionSnapshot, error) {
+	var s SuggestionSnapshot
+	err := r.pool.QueryRow(ctx, `
+		SELECT s.id, s.memory_a_id, s.memory_b_id, s.similarity, s.status, s.project_id,
+		       a.project_id, b.project_id, a.replaced_by, b.replaced_by
+		FROM consolidation_suggestions s
+		JOIN memories a ON a.id = s.memory_a_id
+		JOIN memories b ON b.id = s.memory_b_id
+		WHERE s.id = $1
+	`, suggestionID).Scan(
+		&s.SuggestionID, &s.MemoryAID, &s.MemoryBID, &s.Similarity, &s.Status, &s.ProjectID,
+		&s.AMemoryProj, &s.BMemoryProj, &s.AReplacedBy, &s.BReplacedBy,
+	)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get suggestion snapshot: %w", err)
+	}
+	return &s, nil
+}
+
 func scanJob(rows pgx.Row) (*Job, error) {
 	var job Job
 	var payloadBytes []byte
