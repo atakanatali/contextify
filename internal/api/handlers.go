@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -79,6 +80,10 @@ func (h *Handlers) UpdateMemory(w http.ResponseWriter, r *http.Request) {
 
 	mem, err := h.svc.Update(r.Context(), id, req)
 	if err != nil {
+		if errors.Is(err, memory.ErrMemoryNotFound) {
+			writeError(w, http.StatusNotFound, "memory not found")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -95,6 +100,10 @@ func (h *Handlers) DeleteMemory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.svc.Delete(r.Context(), id); err != nil {
+		if errors.Is(err, memory.ErrMemoryNotFound) {
+			writeError(w, http.StatusNotFound, "memory not found")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -220,6 +229,10 @@ func (h *Handlers) PromoteMemory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.svc.Promote(r.Context(), id); err != nil {
+		if errors.Is(err, memory.ErrMemoryNotFound) {
+			writeError(w, http.StatusNotFound, "memory not found")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

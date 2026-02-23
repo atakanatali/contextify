@@ -141,17 +141,23 @@ func (r *Repository) Update(ctx context.Context, id uuid.UUID, req UpdateRequest
 	args = append(args, id)
 	query := fmt.Sprintf("UPDATE memories SET %s WHERE id = $%d", strings.Join(sets, ", "), argIdx)
 
-	_, err := r.pool.Exec(ctx, query, args...)
+	result, err := r.pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update memory: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("%w: %s", ErrMemoryNotFound, id)
 	}
 	return nil
 }
 
 func (r *Repository) Delete(ctx context.Context, id uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, "DELETE FROM memories WHERE id = $1", id)
+	result, err := r.pool.Exec(ctx, "DELETE FROM memories WHERE id = $1", id)
 	if err != nil {
 		return fmt.Errorf("delete memory: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("%w: %s", ErrMemoryNotFound, id)
 	}
 	return nil
 }
@@ -349,9 +355,12 @@ func (r *Repository) IncrementAccess(ctx context.Context, id uuid.UUID, ttlExten
 }
 
 func (r *Repository) PromoteToLongTerm(ctx context.Context, id uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, "UPDATE memories SET ttl_seconds = NULL, expires_at = NULL WHERE id = $1", id)
+	result, err := r.pool.Exec(ctx, "UPDATE memories SET ttl_seconds = NULL, expires_at = NULL WHERE id = $1", id)
 	if err != nil {
 		return fmt.Errorf("promote to long-term: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("%w: %s", ErrMemoryNotFound, id)
 	}
 	return nil
 }
