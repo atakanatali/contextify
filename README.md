@@ -193,6 +193,32 @@ make bench-recall
 
 In CI (`Backend CI` workflow), the benchmark report is uploaded as the `recall-benchmark-report` artifact.
 
+## Steward Operations (Rollout & Runbook)
+
+The Steward subsystem now includes:
+
+- Steward Console UI (`/steward`) for run history, event traces, tokens, latency, and controls
+- runtime safety guardrails (backpressure, breaker state, stale-job recovery visibility)
+- log security controls (redaction markers, retention cleanup, optional admin token guard)
+- verification matrix artifact generation (`make verify-steward`)
+
+Recommended rollout order:
+
+1. enable steward in `dry_run=true`
+2. monitor `/api/v1/steward/status` + `/steward`
+3. enable write mode for high-confidence auto-merge
+4. enable derivation
+5. enable self-learn conservatively
+
+Steward docs:
+
+- [ADR-001 Memory Steward](docs/steward/ADR-001-memory-steward.md)
+- [Telemetry Contract](docs/steward/telemetry-contract.md)
+- [Reliability Hardening](docs/steward/reliability-hardening.md)
+- [Log Security](docs/steward/log-security.md)
+- [Verification Matrix](docs/steward/verification-matrix.md)
+- [Rollout + SLO + Runbook](docs/steward/rollout-runbook.md)
+
 ## Manual Agent Setup
 
 If you prefer manual configuration:
