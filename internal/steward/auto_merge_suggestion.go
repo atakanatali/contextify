@@ -11,14 +11,19 @@ import (
 )
 
 type AutoMergeSuggestionExecutor struct {
-	repo   *Repository
-	svc    *memory.Service
-	dryRun bool
-	llm    *llm.Client
+	repo       *Repository
+	svc        *memory.Service
+	dryRun     bool
+	llm        *llm.Client
+	llmAllowed func() bool
 }
 
 func NewAutoMergeSuggestionExecutor(repo *Repository, svc *memory.Service, dryRun bool, llmClient *llm.Client) *AutoMergeSuggestionExecutor {
 	return &AutoMergeSuggestionExecutor{repo: repo, svc: svc, dryRun: dryRun, llm: llmClient}
+}
+
+func NewAutoMergeSuggestionExecutorWithGuard(repo *Repository, svc *memory.Service, dryRun bool, llmClient *llm.Client, llmAllowed func() bool) *AutoMergeSuggestionExecutor {
+	return &AutoMergeSuggestionExecutor{repo: repo, svc: svc, dryRun: dryRun, llm: llmClient, llmAllowed: llmAllowed}
 }
 
 func (e *AutoMergeSuggestionExecutor) Execute(ctx context.Context, job Job) (*ExecutionResult, error) {
@@ -74,7 +79,7 @@ func (e *AutoMergeSuggestionExecutor) Execute(ctx context.Context, job Job) (*Ex
 		}, nil
 	}
 
-	if e.llm != nil {
+	if e.llm != nil && (e.llmAllowed == nil || e.llmAllowed()) {
 		aMem, err := e.svc.Get(ctx, snap.MemoryAID)
 		if err == nil && aMem != nil {
 			bMem, err2 := e.svc.Get(ctx, snap.MemoryBID)

@@ -115,10 +115,14 @@ func (r *Repository) ClaimJobs(ctx context.Context, workerID string, batchSize i
 }
 
 func (r *Repository) EnqueueAutoMergeSuggestionJobs(ctx context.Context, threshold float64, maxAttempts, limit int) (int64, error) {
-	return r.enqueueAutoMergeSuggestionJobsSlow(ctx, threshold, maxAttempts, limit)
+	return r.enqueueAutoMergeSuggestionJobsSlow(ctx, threshold, maxAttempts, limit, 0, 0)
 }
 
-func (r *Repository) enqueueAutoMergeSuggestionJobsSlow(ctx context.Context, threshold float64, maxAttempts, limit int) (int64, error) {
+func (r *Repository) EnqueueAutoMergeSuggestionJobsWithBackpressure(ctx context.Context, threshold float64, maxAttempts, limit, maxQueuedTotal, maxQueuedPerProject int) (int64, error) {
+	return r.enqueueAutoMergeSuggestionJobsSlow(ctx, threshold, maxAttempts, limit, maxQueuedTotal, maxQueuedPerProject)
+}
+
+func (r *Repository) enqueueAutoMergeSuggestionJobsSlow(ctx context.Context, threshold float64, maxAttempts, limit, maxQueuedTotal, maxQueuedPerProject int) (int64, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, memory_a_id, memory_b_id, similarity, project_id
 		FROM consolidation_suggestions
@@ -139,6 +143,24 @@ func (r *Repository) enqueueAutoMergeSuggestionJobsSlow(ctx context.Context, thr
 		if err := rows.Scan(&sid, &aID, &bID, &similarity, &projectID); err != nil {
 			return inserted, fmt.Errorf("scan auto-merge suggestion: %w", err)
 		}
+		if maxQueuedTotal > 0 {
+			q, err := r.CountQueuedJobs(ctx)
+			if err != nil {
+				return inserted, err
+			}
+			if q >= int64(maxQueuedTotal) {
+				break
+			}
+		}
+		if maxQueuedPerProject > 0 && projectID != nil && *projectID != "" {
+			q, err := r.CountQueuedJobsForProject(ctx, *projectID)
+			if err != nil {
+				return inserted, err
+			}
+			if q >= int64(maxQueuedPerProject) {
+				continue
+			}
+		}
 		_, err := r.pool.Exec(ctx, `
 			INSERT INTO steward_jobs (
 				id, job_type, project_id, source_memory_ids, trigger_reason, payload, status, priority,
@@ -157,6 +179,22 @@ func (r *Repository) enqueueAutoMergeSuggestionJobsSlow(ctx context.Context, thr
 		inserted++
 	}
 	return inserted, rows.Err()
+}
+
+func (r *Repository) CountQueuedJobs(ctx context.Context) (int64, error) {
+	var n int64
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM steward_jobs WHERE status = 'queued'`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count queued jobs: %w", err)
+	}
+	return n, nil
+}
+
+func (r *Repository) CountQueuedJobsForProject(ctx context.Context, projectID string) (int64, error) {
+	var n int64
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM steward_jobs WHERE status = 'queued' AND project_id = $1`, projectID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count queued jobs for project: %w", err)
+	}
+	return n, nil
 }
 
 type SuggestionSnapshot struct {
@@ -572,6 +610,44 @@ func (r *Repository) GetMetricsSummary(ctx context.Context) (*MetricsSummary, er
 			return nil, fmt.Errorf("scan steward failure breakdown: %w", err)
 		}
 		out.TopFailureReasons = append(out.TopFailureReasons, fb)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) GetQueueHealthSummary(ctx context.Context) (*QueueHealthSummary, error) {
+	out := &QueueHealthSummary{}
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM steward_jobs WHERE status = 'queued'`).Scan(&out.QueuedTotal); err != nil {
+		return nil, fmt.Errorf("count queue depth: %w", err)
+	}
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM steward_jobs WHERE status = 'dead_letter'`).Scan(&out.DeadLetterTotal); err != nil {
+		return nil, fmt.Errorf("count dead_letter: %w", err)
+	}
+	if err := r.pool.QueryRow(ctx, `
+		SELECT COALESCE(AVG(latency_ms), 0)
+		FROM steward_runs
+		WHERE latency_ms IS NOT NULL
+		  AND created_at >= NOW() - INTERVAL '1 hour'
+	`).Scan(&out.AverageProcessingLatencyMs); err != nil {
+		return nil, fmt.Errorf("avg processing latency: %w", err)
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT COALESCE(project_id, '__global__') AS project_id, COUNT(*) AS c
+		FROM steward_jobs
+		WHERE status = 'queued'
+		GROUP BY 1
+		ORDER BY c DESC
+		LIMIT 5
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("top queued by project: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var row ProjectQueueDepth
+		if err := rows.Scan(&row.ProjectID, &row.Count); err != nil {
+			return nil, fmt.Errorf("scan queued by project: %w", err)
+		}
+		out.QueuedByProjectTop = append(out.QueuedByProjectTop, row)
 	}
 	return out, rows.Err()
 }
