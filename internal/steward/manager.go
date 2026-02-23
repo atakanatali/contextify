@@ -61,6 +61,7 @@ func (m *Manager) Start() {
 		llmClient = stewardllm.NewClient(m.ollamaURL, m.cfg.Model)
 	}
 	m.registry.Register("auto_merge_from_suggestion", NewAutoMergeSuggestionExecutor(m.repo, m.svc, m.cfg.DryRun, llmClient))
+	m.registry.Register("derive_memories", NewDerivationExecutor(m.repo, m.svc, m.cfg.Derivation))
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.wg.Add(1)

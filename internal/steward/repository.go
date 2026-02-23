@@ -193,6 +193,58 @@ func (r *Repository) GetSuggestionSnapshot(ctx context.Context, suggestionID uui
 	return &s, nil
 }
 
+func (r *Repository) EnqueueDeriveJob(ctx context.Context, projectID *string, sourceIDs []uuid.UUID, payload map[string]any, maxAttempts int, idempotencyKey string) error {
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal derive job payload: %w", err)
+	}
+	_, err = r.pool.Exec(ctx, `
+		INSERT INTO steward_jobs (
+			id, job_type, project_id, source_memory_ids, trigger_reason, payload, status, priority,
+			attempt_count, max_attempts, run_after, idempotency_key
+		)
+		VALUES (
+			uuid_generate_v4(), 'derive_memories', $1, $2, 'post_merge_derivation', $3::jsonb, 'queued',
+			50, 0, $4, NOW(), $5
+		)
+		ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+	`, projectID, sourceIDs, string(b), maxAttempts, idempotencyKey)
+	if err != nil {
+		return fmt.Errorf("enqueue derive job: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) StoreDerivationRecord(ctx context.Context, d Derivation) error {
+	payload := d.Payload
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal derivation payload: %w", err)
+	}
+	if d.ID == uuid.Nil {
+		d.ID = uuid.New()
+	}
+	_, err = r.pool.Exec(ctx, `
+		INSERT INTO memory_derivations (
+			id, source_memory_ids, derived_memory_id, derivation_type, confidence, novelty, status, model, payload, created_at, updated_at
+		)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb, COALESCE($10, NOW()), COALESCE($11, NOW()))
+	`, d.ID, d.SourceMemoryIDs, d.DerivedMemoryID, d.DerivationType, d.Confidence, d.Novelty, d.Status, d.Model, string(b), d.CreatedAt, d.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("store derivation record: %w", err)
+	}
+	return nil
+}
+
 func scanJob(rows pgx.Row) (*Job, error) {
 	var job Job
 	var payloadBytes []byte
