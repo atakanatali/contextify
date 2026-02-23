@@ -458,8 +458,15 @@ func (r *Repository) GetStats(ctx context.Context) (*Stats, error) {
 	for rows.Next() {
 		var t string
 		var c int
-		rows.Scan(&t, &c)
+		if err := rows.Scan(&t, &c); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan count by type: %w", err)
+		}
 		stats.ByType[t] = c
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("iterate count by type: %w", err)
 	}
 	rows.Close()
 
@@ -471,8 +478,15 @@ func (r *Repository) GetStats(ctx context.Context) (*Stats, error) {
 	for rows.Next() {
 		var s string
 		var c int
-		rows.Scan(&s, &c)
+		if err := rows.Scan(&s, &c); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan count by scope: %w", err)
+		}
 		stats.ByScope[s] = c
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("iterate count by scope: %w", err)
 	}
 	rows.Close()
 
@@ -484,20 +498,35 @@ func (r *Repository) GetStats(ctx context.Context) (*Stats, error) {
 	for rows.Next() {
 		var a string
 		var c int
-		rows.Scan(&a, &c)
+		if err := rows.Scan(&a, &c); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan count by agent: %w", err)
+		}
 		stats.ByAgent[a] = c
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("iterate count by agent: %w", err)
 	}
 	rows.Close()
 
 	// Long-term vs short-term
-	r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE ttl_seconds IS NULL AND replaced_by IS NULL").Scan(&stats.LongTermCount)
-	r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE ttl_seconds IS NOT NULL AND replaced_by IS NULL").Scan(&stats.ShortTermCount)
+	if err := r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE ttl_seconds IS NULL AND replaced_by IS NULL").Scan(&stats.LongTermCount); err != nil {
+		return nil, fmt.Errorf("count long-term memories: %w", err)
+	}
+	if err := r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE ttl_seconds IS NOT NULL AND replaced_by IS NULL").Scan(&stats.ShortTermCount); err != nil {
+		return nil, fmt.Errorf("count short-term memories: %w", err)
+	}
 
 	// Expiring soon (next hour)
-	r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE expires_at IS NOT NULL AND expires_at < NOW() + INTERVAL '1 hour' AND replaced_by IS NULL").Scan(&stats.ExpiringCount)
+	if err := r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM memories WHERE expires_at IS NOT NULL AND expires_at < NOW() + INTERVAL '1 hour' AND replaced_by IS NULL").Scan(&stats.ExpiringCount); err != nil {
+		return nil, fmt.Errorf("count expiring memories: %w", err)
+	}
 
 	// Pending consolidation suggestions
-	r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM consolidation_suggestions WHERE status = 'pending'").Scan(&stats.PendingSuggestions)
+	if err := r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM consolidation_suggestions WHERE status = 'pending'").Scan(&stats.PendingSuggestions); err != nil {
+		return nil, fmt.Errorf("count pending suggestions: %w", err)
+	}
 
 	return stats, nil
 }
