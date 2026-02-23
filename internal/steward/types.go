@@ -68,6 +68,28 @@ type Event struct {
 	CreatedAt     time.Time
 }
 
+type RunFilters struct {
+	Status    *string
+	JobType   *string
+	ProjectID *string
+	Model     *string
+	Limit     int
+	Offset    int
+}
+
+type MetricsSummary struct {
+	RunsLastHour        int64              `json:"runs_last_hour"`
+	SuccessRate         float64            `json:"success_rate"`
+	AverageTokensPerRun float64            `json:"average_tokens_per_run"`
+	P95LatencyMs        int64              `json:"p95_latency_ms"`
+	TopFailureReasons   []FailureBreakdown `json:"top_failure_reasons"`
+}
+
+type FailureBreakdown struct {
+	Reason string `json:"reason"`
+	Count  int64  `json:"count"`
+}
+
 type Derivation struct {
 	ID              uuid.UUID
 	SourceMemoryIDs []uuid.UUID

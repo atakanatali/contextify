@@ -143,7 +143,12 @@ func (m *Manager) executeJob(parent context.Context, job Job) error {
 		return err
 	}
 	_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "job_claimed", map[string]any{"worker_id": m.workerID, "attempt_count": job.AttemptCount})
-	_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "run_started", map[string]any{"dry_run": m.cfg.DryRun})
+	_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "run_started", map[string]any{"schema_version": 1, "dry_run": m.cfg.DryRun})
+	_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "input_prepared", map[string]any{
+		"job_type":          job.JobType,
+		"project_id":        job.ProjectID,
+		"source_memory_ids": job.SourceMemoryIDs,
+	})
 
 	executor, err := m.registry.ExecutorFor(job.JobType)
 	if err != nil {
@@ -152,7 +157,6 @@ func (m *Manager) executeJob(parent context.Context, job Job) error {
 	start := time.Now()
 	result, execErr := executor.Execute(jobCtx, job)
 	latencyMs := int(time.Since(start).Milliseconds())
-	_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "decision_made", map[string]any{"latency_ms": latencyMs})
 
 	if execErr != nil {
 		status, runAfter, markErr := m.repo.MarkFailure(jobCtx, job, run, execErr, true)
@@ -165,20 +169,41 @@ func (m *Manager) executeJob(parent context.Context, job Job) error {
 	if result == nil {
 		result = &ExecutionResult{Status: JobSucceeded, Decision: "empty_result", Output: map[string]any{}}
 	}
+	if result.LatencyMs == nil {
+		result.LatencyMs = &latencyMs
+	}
+	if result.Model != "" || result.Provider != "" || result.TotalTokens != nil {
+		_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "model_called", map[string]any{
+			"provider":          result.Provider,
+			"model":             result.Model,
+			"prompt_tokens":     result.PromptTokens,
+			"completion_tokens": result.CompletionTokens,
+			"total_tokens":      result.TotalTokens,
+			"latency_ms":        result.LatencyMs,
+		})
+		_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "model_returned", map[string]any{"decision": result.Decision})
+	}
+	_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "decision_emitted", map[string]any{
+		"decision":     result.Decision,
+		"side_effects": result.SideEffects,
+	})
 
 	if m.cfg.DryRun {
 		if result.Output == nil {
 			result.Output = map[string]any{}
 		}
 		result.Output["dry_run"] = true
-		_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "write_skipped", map[string]any{"reason": "dry_run"})
+		_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "write_attempted", map[string]any{"dry_run": true})
+		_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "write_skipped", map[string]any{"reason": "dry_run", "side_effects": result.SideEffects})
 	} else {
-		_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "write_applied", map[string]any{"decision": result.Decision})
+		_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "write_attempted", map[string]any{"dry_run": false})
+		_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "write_applied", map[string]any{"decision": result.Decision, "side_effects": result.SideEffects})
 	}
 
 	if err := m.repo.MarkSucceeded(jobCtx, job, run, result); err != nil {
 		return err
 	}
+	_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "run_succeeded", map[string]any{"decision": result.Decision, "latency_ms": latencyMs})
 	_ = m.repo.AppendEvent(jobCtx, job.ID, &run.ID, "job_completed", map[string]any{"decision": result.Decision, "latency_ms": latencyMs})
 	return nil
 }
