@@ -264,9 +264,20 @@ func (r *Repository) MarkSucceeded(ctx context.Context, job Job, run *Run, resul
 	outJSON, _ := json.Marshal(output)
 	_, err := r.pool.Exec(ctx, `
 		UPDATE steward_runs
-		SET output_snapshot = $2::jsonb, status = 'succeeded', completed_at = NOW()
+		SET output_snapshot = $2::jsonb,
+		    provider = COALESCE($3, provider),
+		    model = COALESCE($4, model),
+		    prompt_tokens = COALESCE($5, prompt_tokens),
+		    completion_tokens = COALESCE($6, completion_tokens),
+		    total_tokens = COALESCE($7, total_tokens),
+		    latency_ms = COALESCE($8, latency_ms),
+		    status = 'succeeded',
+		    completed_at = NOW()
 		WHERE id = $1
-	`, run.ID, string(outJSON))
+	`, run.ID, string(outJSON),
+		nullableString(result.Provider), nullableString(result.Model),
+		result.PromptTokens, result.CompletionTokens, result.TotalTokens, result.LatencyMs,
+	)
 	if err != nil {
 		return fmt.Errorf("mark run succeeded: %w", err)
 	}
@@ -334,4 +345,11 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func nullableString(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return &v
 }

@@ -7,16 +7,18 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/atakanatali/contextify/internal/memory"
+	"github.com/atakanatali/contextify/internal/steward/llm"
 )
 
 type AutoMergeSuggestionExecutor struct {
 	repo   *Repository
 	svc    *memory.Service
 	dryRun bool
+	llm    *llm.Client
 }
 
-func NewAutoMergeSuggestionExecutor(repo *Repository, svc *memory.Service, dryRun bool) *AutoMergeSuggestionExecutor {
-	return &AutoMergeSuggestionExecutor{repo: repo, svc: svc, dryRun: dryRun}
+func NewAutoMergeSuggestionExecutor(repo *Repository, svc *memory.Service, dryRun bool, llmClient *llm.Client) *AutoMergeSuggestionExecutor {
+	return &AutoMergeSuggestionExecutor{repo: repo, svc: svc, dryRun: dryRun, llm: llmClient}
 }
 
 func (e *AutoMergeSuggestionExecutor) Execute(ctx context.Context, job Job) (*ExecutionResult, error) {
@@ -70,6 +72,53 @@ func (e *AutoMergeSuggestionExecutor) Execute(ctx context.Context, job Job) (*Ex
 			Output:      map[string]any{"suggestion_id": req.SuggestionID, "skip_reason": "project_mismatch"},
 			SideEffects: []map[string]any{{"type": "suggestion_dismissed", "suggestion_id": req.SuggestionID, "reason": "project_mismatch"}},
 		}, nil
+	}
+
+	if e.llm != nil {
+		aMem, err := e.svc.Get(ctx, snap.MemoryAID)
+		if err == nil && aMem != nil {
+			bMem, err2 := e.svc.Get(ctx, snap.MemoryBID)
+			if err2 == nil && bMem != nil {
+				decision, metrics, derr := e.llm.DecideMerge(ctx, llm.MergeDecisionInput{
+					MemoryATitle:   aMem.Title,
+					MemoryAContent: aMem.Content,
+					MemoryATags:    aMem.Tags,
+					MemoryBTitle:   bMem.Title,
+					MemoryBContent: bMem.Content,
+					MemoryBTags:    bMem.Tags,
+					Similarity:     snap.Similarity,
+					StrategyHints:  map[string]string{"default": req.MergeStrategy},
+				})
+				if derr == nil && decision != nil {
+					if decision.HasConflict || decision.Confidence < 0.85 || decision.Decision != "merge" {
+						if !e.dryRun {
+							_ = e.svc.UpdateSuggestionStatus(ctx, req.SuggestionID, "dismissed")
+						}
+						out := map[string]any{
+							"suggestion_id": req.SuggestionID,
+							"skip_reason":   "llm_conflict_or_low_confidence",
+							"llm_decision":  decision,
+						}
+						res := &ExecutionResult{
+							Status:      JobSucceeded,
+							Decision:    "llm_skip",
+							Retryable:   false,
+							Output:      out,
+							SideEffects: []map[string]any{{"type": "suggestion_dismissed", "suggestion_id": req.SuggestionID, "reason": "llm_guard"}},
+						}
+						if metrics != nil {
+							res.Provider = metrics.Provider
+							res.Model = metrics.Model
+							res.PromptTokens = metrics.PromptTokens
+							res.CompletionTokens = metrics.CompletionTokens
+							res.TotalTokens = metrics.TotalTokens
+							res.LatencyMs = metrics.LatencyMs
+						}
+						return res, nil
+					}
+				}
+			}
+		}
 	}
 
 	if e.dryRun {

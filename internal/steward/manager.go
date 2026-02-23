@@ -12,6 +12,7 @@ import (
 
 	"github.com/atakanatali/contextify/internal/config"
 	"github.com/atakanatali/contextify/internal/memory"
+	stewardllm "github.com/atakanatali/contextify/internal/steward/llm"
 )
 
 const leaderLockKey int64 = 84201001
@@ -55,7 +56,11 @@ func (m *Manager) Start() {
 		slog.Info("steward disabled")
 		return
 	}
-	m.registry.Register("auto_merge_from_suggestion", NewAutoMergeSuggestionExecutor(m.repo, m.svc, m.cfg.DryRun))
+	var llmClient *stewardllm.Client
+	if m.cfg.LLMConflictGuardEnabled {
+		llmClient = stewardllm.NewClient(m.ollamaURL, m.cfg.Model)
+	}
+	m.registry.Register("auto_merge_from_suggestion", NewAutoMergeSuggestionExecutor(m.repo, m.svc, m.cfg.DryRun, llmClient))
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.wg.Add(1)
