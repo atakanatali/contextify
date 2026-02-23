@@ -16,6 +16,10 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Go toolconfig: `internal/toolconfig/desktop.go` and `internal/toolconfig/chat.go`
 - Cross-platform Claude Desktop config path detection (macOS, Windows, Linux)
 - Auto-restart Claude Desktop after configuration
+- Steward rollout and operations documentation set:
+  - reliability hardening, log security, verification matrix, rollout/SLO/runbook docs under `docs/steward/`
+- Steward verification matrix artifact generation (`make verify-steward`) and Backend CI artifact upload
+- Steward observability e2e smoke test (`tests/e2e/steward_observability_test.go`)
 
 ### Changed
 - Install wizard expanded from 4 to 7 tool options

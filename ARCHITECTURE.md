@@ -587,6 +587,13 @@ The Go server includes connection retry logic (10 attempts, linear backoff) to h
 
 The **Memory Steward** is a planned in-process subsystem for continuous, auditable lifecycle management (dedup auto-merge, derivation, recheck, policy tuning). It is defined in [docs/steward/ADR-001-memory-steward.md](docs/steward/ADR-001-memory-steward.md) and is designed to be **disabled by default** so current behavior remains unchanged.
 
+Operational rollout, SLOs, reliability controls, log-security posture, and verification guidance are documented in:
+
+- [docs/steward/reliability-hardening.md](docs/steward/reliability-hardening.md)
+- [docs/steward/log-security.md](docs/steward/log-security.md)
+- [docs/steward/verification-matrix.md](docs/steward/verification-matrix.md)
+- [docs/steward/rollout-runbook.md](docs/steward/rollout-runbook.md)
+
 ### Steward Module Decomposition
 
 ```mermaid
