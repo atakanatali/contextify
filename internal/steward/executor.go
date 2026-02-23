@@ -6,14 +6,20 @@ import (
 )
 
 type ExecutionResult struct {
-	Status       JobStatus
-	Decision     string
-	Metadata     map[string]any
-	Retryable    bool
-	SideEffects  []map[string]any
-	Output       map[string]any
-	ErrorClass   string
-	ErrorMessage string
+	Status           JobStatus
+	Decision         string
+	Metadata         map[string]any
+	Retryable        bool
+	SideEffects      []map[string]any
+	Output           map[string]any
+	ErrorClass       string
+	ErrorMessage     string
+	Provider         string
+	Model            string
+	PromptTokens     *int
+	CompletionTokens *int
+	TotalTokens      *int
+	LatencyMs        *int
 }
 
 type Executor interface {
