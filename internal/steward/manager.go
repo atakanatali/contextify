@@ -55,6 +55,7 @@ func (m *Manager) Start() {
 		slog.Info("steward disabled")
 		return
 	}
+	m.registry.Register("auto_merge_from_suggestion", NewAutoMergeSuggestionExecutor(m.repo, m.svc, m.cfg.DryRun))
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.wg.Add(1)
@@ -104,6 +105,14 @@ func (m *Manager) tick(ctx context.Context, leaseDuration time.Duration) error {
 		}
 		if !m.isLeader() {
 			return nil
+		}
+	}
+
+	if m.cfg.AutoMergeFromSuggestions {
+		if n, err := m.repo.EnqueueAutoMergeSuggestionJobs(ctx, m.cfg.AutoMergeThreshold, m.cfg.MaxAttempts, m.cfg.ClaimBatchSize*4); err != nil {
+			slog.Warn("failed to enqueue auto-merge suggestion jobs", "error", err)
+		} else if n > 0 {
+			slog.Debug("enqueued auto-merge suggestion jobs", "count", n)
 		}
 	}
 
