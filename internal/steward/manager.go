@@ -39,6 +39,7 @@ type Manager struct {
 	health                    QueueHealthSummary
 	startupRecoveredStaleJobs int64
 	breaker                   circuitBreakerState
+	lastRetentionSweep        time.Time
 }
 
 type circuitBreakerState struct {
@@ -169,6 +170,7 @@ func (m *Manager) tick(ctx context.Context, leaseDuration time.Duration) error {
 			}
 		}
 	}
+	m.maybeRunRetentionCleanup(ctx)
 
 	jobs, err := m.repo.ClaimJobs(ctx, m.workerID, m.cfg.ClaimBatchSize, leaseDuration)
 	if err != nil {
@@ -441,6 +443,29 @@ func (m *Manager) refreshHealthSnapshot(ctx context.Context) error {
 	m.health = *health
 	m.mu.Unlock()
 	return nil
+}
+
+func (m *Manager) maybeRunRetentionCleanup(ctx context.Context) {
+	if m.cfg.Retention.RunLogDays <= 0 && m.cfg.Retention.EventLogDays <= 0 {
+		return
+	}
+	m.mu.Lock()
+	due := m.lastRetentionSweep.IsZero() || time.Since(m.lastRetentionSweep) >= time.Hour
+	m.mu.Unlock()
+	if !due {
+		return
+	}
+	deletedRuns, deletedEvents, err := m.repo.CleanupRetention(ctx, m.cfg.Retention.RunLogDays, m.cfg.Retention.EventLogDays)
+	if err != nil {
+		slog.Warn("steward retention cleanup failed", "error", err)
+		return
+	}
+	m.mu.Lock()
+	m.lastRetentionSweep = time.Now().UTC()
+	m.mu.Unlock()
+	if deletedRuns > 0 || deletedEvents > 0 {
+		slog.Info("steward retention cleanup completed", "deleted_runs", deletedRuns, "deleted_events", deletedEvents)
+	}
 }
 
 func (m *Manager) breakerShouldDefer(job Job) bool {

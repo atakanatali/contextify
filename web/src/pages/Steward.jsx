@@ -59,6 +59,22 @@ function hasRedaction(value) {
   return false
 }
 
+function collectRedactionReasons(value, acc = new Set()) {
+  if (value == null) return acc
+  if (Array.isArray(value)) {
+    value.forEach((v) => collectRedactionReasons(v, acc))
+    return acc
+  }
+  if (typeof value === 'object') {
+    const reasons = value._redaction_reasons
+    if (Array.isArray(reasons)) reasons.forEach((r) => acc.add(String(r)))
+    Object.values(value).forEach((v) => collectRedactionReasons(v, acc))
+    return acc
+  }
+  if (typeof value === 'string' && value.includes('REDACTED')) acc.add('string_marker')
+  return acc
+}
+
 function jsonText(v) {
   return JSON.stringify(v ?? {}, null, 2)
 }
@@ -248,6 +264,9 @@ export default function Steward() {
 
   const events = Array.isArray(eventsResp.events) ? eventsResp.events : []
   const selectedHasRedaction = selectedRun && (hasRedaction(selectedRun.input) || hasRedaction(selectedRun.output) || hasRedaction(events.map((e) => get(e, 'Data', 'data'))))
+  const redactionReasons = selectedRun
+    ? Array.from(collectRedactionReasons([selectedRun.input, selectedRun.output, events.map((e) => get(e, 'Data', 'data'))]))
+    : []
 
   async function performAction(actionKey, jobId, fn, successMessage) {
     setActionLoading(actionKey)
@@ -677,8 +696,20 @@ export default function Steward() {
                 </div>
 
                 {selectedHasRedaction ? (
-                  <div className="rounded-lg border border-amber-700/40 bg-amber-900/20 text-amber-300 text-xs px-3 py-2">
-                    Redaction indicator: at least one payload field appears redacted.
+                  <div className="rounded-lg border border-amber-700/40 bg-amber-900/20 text-amber-300 text-xs px-3 py-2 space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[10px] px-2 py-0.5 rounded border border-amber-600/50 bg-amber-800/30 font-semibold tracking-wider">REDACTED</span>
+                      <span>At least one payload field was redacted before persistence.</span>
+                    </div>
+                    {redactionReasons.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {redactionReasons.map((reason) => (
+                          <span key={reason} className="text-[10px] px-2 py-0.5 rounded border border-amber-700/40 bg-amber-900/20">
+                            {reason}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -525,6 +526,21 @@ func (h *Handlers) requireSteward(w http.ResponseWriter) bool {
 	return true
 }
 
+func (h *Handlers) requireStewardAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if !h.requireSteward(w) {
+		return false
+	}
+	expected := os.Getenv("STEWARD_ADMIN_TOKEN")
+	if expected == "" {
+		return true
+	}
+	if r.Header.Get("X-Steward-Admin-Token") != expected {
+		writeError(w, http.StatusForbidden, "steward admin token required")
+		return false
+	}
+	return true
+}
+
 func (h *Handlers) GetStewardStatus(w http.ResponseWriter, r *http.Request) {
 	if !h.requireSteward(w) {
 		return
@@ -655,7 +671,7 @@ func (h *Handlers) GetStewardPolicyHistory(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handlers) StewardRunOnce(w http.ResponseWriter, r *http.Request) {
-	if !h.requireSteward(w) {
+	if !h.requireStewardAdmin(w, r) {
 		return
 	}
 	if err := h.stewardMgr.RunOnce(r.Context()); err != nil {
@@ -666,7 +682,7 @@ func (h *Handlers) StewardRunOnce(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) UpdateStewardMode(w http.ResponseWriter, r *http.Request) {
-	if !h.requireSteward(w) {
+	if !h.requireStewardAdmin(w, r) {
 		return
 	}
 	var req stewardModeRequest
@@ -678,7 +694,7 @@ func (h *Handlers) UpdateStewardMode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) RetryStewardJob(w http.ResponseWriter, r *http.Request) {
-	if !h.requireSteward(w) {
+	if !h.requireStewardAdmin(w, r) {
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -694,7 +710,7 @@ func (h *Handlers) RetryStewardJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) CancelStewardJob(w http.ResponseWriter, r *http.Request) {
-	if !h.requireSteward(w) {
+	if !h.requireStewardAdmin(w, r) {
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -710,7 +726,7 @@ func (h *Handlers) CancelStewardJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) RollbackStewardPolicy(w http.ResponseWriter, r *http.Request) {
-	if !h.requireSteward(w) {
+	if !h.requireStewardAdmin(w, r) {
 		return
 	}
 	var req stewardPolicyRollbackRequest
