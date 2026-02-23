@@ -17,6 +17,7 @@ import (
 	"github.com/atakanatali/contextify/internal/mcp"
 	"github.com/atakanatali/contextify/internal/memory"
 	"github.com/atakanatali/contextify/internal/scheduler"
+	"github.com/atakanatali/contextify/internal/steward"
 )
 
 var version = "dev" // set via ldflags at build time
@@ -62,6 +63,22 @@ func main() {
 	// Initialize memory service
 	repo := memory.NewRepository(pool)
 	svc := memory.NewService(repo, embedClient, cfg.Memory, cfg.Search)
+
+	// Steward bootstrap wiring (runtime implementation is added incrementally in STW04+)
+	stewardMgr := steward.NewManager(pool, svc, cfg.Steward, cfg.Embedding.OllamaURL)
+	slog.Info("steward config",
+		"enabled", cfg.Steward.Enabled,
+		"dry_run", cfg.Steward.DryRun,
+		"tick_interval", cfg.Steward.TickInterval,
+		"claim_batch_size", cfg.Steward.ClaimBatchSize,
+		"max_attempts", cfg.Steward.MaxAttempts,
+		"request_timeout", cfg.Steward.RequestTimeout,
+		"model", cfg.Steward.Model,
+		"ollama_url_override", cfg.Steward.OllamaURL != "",
+		"auto_merge_threshold", cfg.Steward.AutoMergeThreshold,
+	)
+	stewardMgr.Start()
+	defer stewardMgr.Stop()
 
 	// Start TTL cleanup scheduler
 	cleanup := scheduler.NewCleanup(svc, cfg.Memory.CleanupInterval)

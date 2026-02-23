@@ -29,3 +29,31 @@ search:
   cache_enabled: true       # enable hot-query search cache
   cache_ttl: 30s            # cache item TTL
   cache_max_entries: 500    # max number of cached query keys
+
+steward:
+  enabled: false            # safe default: off until explicitly enabled
+  dry_run: true             # if enabled, dry-run by default
+  tick_interval: 30s        # worker tick interval
+  claim_batch_size: 10
+  max_attempts: 3
+  request_timeout: 30s
+  model: "qwen2.5:3b"
+  ollama_url: ""            # optional override; falls back to embedding.ollama_url
+  auto_merge_threshold: 0.92
+  auto_merge_from_suggestions: true
+  llm_conflict_guard_enabled: false
+
+  derivation:
+    enabled: false
+    max_candidates: 3
+    min_confidence: 0.80
+    min_novelty: 0.20
+
+  self_learn:
+    enabled: false
+    eval_interval: 24h
+    min_sample_size: 100
+
+  retention:
+    run_log_days: 14
+    event_log_days: 14
