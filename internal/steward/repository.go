@@ -318,6 +318,7 @@ func (r *Repository) CreateRun(ctx context.Context, job Job, provider, model str
 		Status:    string(JobRunning),
 		CreatedAt: time.Now().UTC(),
 	}
+	run.InputSnapshot = RedactValue(run.InputSnapshot).(map[string]any)
 	if provider != "" {
 		run.Provider = &provider
 	}
@@ -339,6 +340,7 @@ func (r *Repository) AppendEvent(ctx context.Context, jobID uuid.UUID, runID *uu
 	if data == nil {
 		data = map[string]any{}
 	}
+	data = RedactValue(data).(map[string]any)
 	b, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("marshal steward event data: %w", err)
@@ -364,6 +366,7 @@ func (r *Repository) MarkSucceeded(ctx context.Context, job Job, run *Run, resul
 	if result.Decision != "" {
 		output["decision"] = result.Decision
 	}
+	output = RedactValue(output).(map[string]any)
 	outJSON, _ := json.Marshal(output)
 	_, err := r.pool.Exec(ctx, `
 		UPDATE steward_runs
@@ -650,4 +653,29 @@ func (r *Repository) GetQueueHealthSummary(ctx context.Context) (*QueueHealthSum
 		out.QueuedByProjectTop = append(out.QueuedByProjectTop, row)
 	}
 	return out, rows.Err()
+}
+
+func (r *Repository) CleanupRetention(ctx context.Context, runLogDays, eventLogDays int) (int64, int64, error) {
+	var deletedRuns, deletedEvents int64
+	if runLogDays > 0 {
+		res, err := r.pool.Exec(ctx, `
+			DELETE FROM steward_runs
+			WHERE created_at < NOW() - ($1::text || ' days')::interval
+		`, runLogDays)
+		if err != nil {
+			return 0, 0, fmt.Errorf("cleanup steward_runs retention: %w", err)
+		}
+		deletedRuns = res.RowsAffected()
+	}
+	if eventLogDays > 0 {
+		res, err := r.pool.Exec(ctx, `
+			DELETE FROM steward_events
+			WHERE created_at < NOW() - ($1::text || ' days')::interval
+		`, eventLogDays)
+		if err != nil {
+			return deletedRuns, 0, fmt.Errorf("cleanup steward_events retention: %w", err)
+		}
+		deletedEvents = res.RowsAffected()
+	}
+	return deletedRuns, deletedEvents, nil
 }
